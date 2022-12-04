@@ -5,14 +5,15 @@
 
 # Use this to control how many gpu you use, It's 1-gpu training if you specify
 # just 1gpu, otherwise it's is multiple gpu training based on DDP in pytorch
-export CUDA_VISIBLE_DEVICES="0,1,2,3,4,5,6,7"
+export CUDA_VISIBLE_DEVICES="0,1,2"
+# export CUDA_VISIBLE_DEVICES=
 # The NCCL_SOCKET_IFNAME variable specifies which IP interface to use for nccl
 # communication. More details can be found in
 # https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/env.html
 # export NCCL_SOCKET_IFNAME=ens4f1
 export NCCL_DEBUG=INFO
-stage=0 # start from 0 if you need to start from data preparation
-stop_stage=5
+stage=4 # start from 0 if you need to start from data preparation
+stop_stage=4 
 
 # The num of machines(nodes) for multi-machine training, 1 is for one machine.
 # NFS is required if num_nodes > 1.
@@ -24,7 +25,7 @@ num_nodes=1
 node_rank=0
 # The aishell dataset location, please change this to your own path
 # make sure of using absolute path. DO-NOT-USE relatvie path!
-data=/export/data/asr-data/OpenSLR/33/
+data=/data0
 data_url=www.openslr.org/resources/33
 
 nj=16
@@ -44,16 +45,18 @@ train_set=train
 # 4. conf/train_unified_transformer.yaml: Unified dynamic chunk transformer
 # 5. conf/train_u2++_conformer.yaml: U2++ conformer
 # 6. conf/train_u2++_transformer.yaml: U2++ transformer
-train_config=conf/train_conformer.yaml
+train_config=conf/train_transformer.yaml
 cmvn=true
-dir=exp/conformer
+# dir=exp/with_AIR_train_conformer_exp
+dir=transformer_base_air
 checkpoint=
 
 # use average_checkpoint will get better result
 average_checkpoint=true
 decode_checkpoint=$dir/final.pt
-average_num=30
-decode_modes="ctc_greedy_search ctc_prefix_beam_search attention attention_rescoring"
+average_num=10
+# decode_modes="ctc_greedy_search ctc_prefix_beam_search attention attention_rescoring"
+decode_modes="ctc_greedy_search"
 
 . tools/parse_options.sh || exit 1;
 
@@ -148,7 +151,7 @@ if [ ${stage} -le 4 ] && [ ${stop_stage} -ge 4 ]; then
       --ddp.world_size $world_size \
       --ddp.rank $rank \
       --ddp.dist_backend $dist_backend \
-      --num_workers 1 \
+      --num_workers 6 \
       $cmvn_opts \
       --pin_memory
   } &
@@ -159,13 +162,13 @@ fi
 if [ ${stage} -le 5 ] && [ ${stop_stage} -ge 5 ]; then
   # Test model, please specify the model you want to test by --checkpoint
   if [ ${average_checkpoint} == true ]; then
-    decode_checkpoint=$dir/avg_${average_num}.pt
+    decode_checkpoint=$dir/final.pt
     echo "do model average and final checkpoint is $decode_checkpoint"
     python wenet/bin/average_model.py \
       --dst_model $decode_checkpoint \
       --src_path $dir  \
-      --num ${average_num} \
-      --val_best
+      --num ${average_num} 
+      # --val_best
   fi
   # Please specify decoding_chunk_size for unified streaming and
   # non-streaming model. The default value is -1, which is full chunk
@@ -177,7 +180,7 @@ if [ ${stage} -le 5 ] && [ ${stop_stage} -ge 5 ]; then
   {
     test_dir=$dir/test_${mode}
     mkdir -p $test_dir
-    python wenet/bin/recognize.py --gpu 0 \
+    python wenet/bin/recognize.py --gpu -1 \
       --mode $mode \
       --config $dir/train.yaml \
       --data_type $data_type \
