@@ -176,12 +176,12 @@ def parse_raw(data):
                     frame_offset=start_frame)
             else:
                 waveform, sample_rate = torchaudio.load(wav_file)
-                XX = wav_file.split('/')[4]
-                pattern = "/home/zth/work/new/wenet/examples/aishell/s0/image2reverb/{}_B/*.wav".format(XX) # (or "*.*")
-                reverb_file = random.choice(glob.glob(pattern))
-                waveform = apply_reverb(waveform.squeeze(0).numpy(), reverb_file)
-                waveform /= numpy.max(numpy.abs(waveform))
-                waveform = torch.from_numpy(waveform.astype("float32")).unsqueeze(0)
+                # XX = wav_file.split('/')[4]
+                # pattern = "/home/zth/work/new/wenet/examples/aishell/s0/image2reverb/{}_B/*.wav".format(XX) # (or "*.*")
+                # reverb_file = random.choice(glob.glob(pattern))
+                # waveform = apply_reverb(waveform.squeeze(0).numpy(), reverb_file)
+                # waveform /= numpy.max(numpy.abs(waveform))
+                # waveform = torch.from_numpy(waveform.astype("float32")).unsqueeze(0)
             example = dict(key=key,
                            txt=txt,
                            wav=waveform,

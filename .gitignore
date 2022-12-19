@@ -36,7 +36,8 @@ data
 raw_wav
 tensorboard
 **/*build*
-
+examples/
+*.zip
 # protoc output files
 runtime/core/grpc/wenet.grpc.pb.cc
 runtime/core/grpc/wenet.grpc.pb.h

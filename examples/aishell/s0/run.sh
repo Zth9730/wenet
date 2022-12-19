@@ -45,10 +45,10 @@ train_set=train
 # 4. conf/train_unified_transformer.yaml: Unified dynamic chunk transformer
 # 5. conf/train_u2++_conformer.yaml: U2++ conformer
 # 6. conf/train_u2++_transformer.yaml: U2++ transformer
-train_config=conf/train_transformer.yaml
+train_config=conf/multimodal.yaml
 cmvn=true
 # dir=exp/with_AIR_train_conformer_exp
-dir=transformer_base_air
+dir=/data1/zth/wenet/exp/transformer_base
 checkpoint=
 
 # use average_checkpoint will get better result
