@@ -26,6 +26,7 @@ from wenet.branchformer.encoder import BranchformerEncoder
 from wenet.squeezeformer.encoder import SqueezeformerEncoder
 from wenet.efficient_conformer.encoder import EfficientConformerEncoder
 from wenet.paraformer.paraformer import Paraformer
+from wenet.ssl.bestrq.bestqr_model import BestRQModel
 from wenet.cif.predictor import Predictor
 from wenet.utils.cmvn import load_cmvn
 
@@ -117,6 +118,9 @@ def init_model(configs):
                            ctc=ctc,
                            predictor=predictor,
                            **configs['model_conf'])
+    elif 'ssl_conf' in configs:
+        model = BestRQModel(encoder, **configs['ssl_conf'])
+
     else:
         model = ASRModel(vocab_size=vocab_size,
                          encoder=encoder,
@@ -124,4 +128,5 @@ def init_model(configs):
                          ctc=ctc,
                          lfmmi_dir=configs.get('lfmmi_dir', ''),
                          **configs['model_conf'])
+    
     return model

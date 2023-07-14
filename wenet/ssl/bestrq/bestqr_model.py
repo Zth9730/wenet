@@ -68,6 +68,7 @@ class BestRQModel(torch.nn.Module):
         min_masks: int = 2,
         norm_epsilon: float = 1e-5,
         features_regularization_weight: float = 0.01,
+        cmvn: float = False
     ) -> None:
         super().__init__()
         assert mask_prob > 0.0
@@ -81,11 +82,15 @@ class BestRQModel(torch.nn.Module):
 
         # encoder
         self.encoder = encoder
-        assert self.encoder.global_cmvn is not None
-        self.register_buffer('signal_mean', self.encoder.global_cmvn.mean)
-        self.register_buffer('signal_istd', self.encoder.global_cmvn.istd)
-        self.signal_norm_var = self.encoder.global_cmvn.norm_var
-        # NOTE(Mddct): disable encoder's global_cmvn
+
+        #CMVN
+        # self.cmvn = cmvn
+        # if cmvn:
+        #     assert self.encoder.global_cmvn is not None
+        #     self.register_buffer('signal_mean', self.encoder.global_cmvn.mean)
+        #     self.register_buffer('signal_istd', self.encoder.global_cmvn.istd)
+        #     self.signal_norm_var = self.encoder.global_cmvn.norm_var
+        # # NOTE(Mddct): disable encoder's global_cmvn
         self.encoder.global_cmvn = None
 
         # n softmax
@@ -171,15 +176,13 @@ class BestRQModel(torch.nn.Module):
         self,
         xs: torch.Tensor,
         xs_lens: torch.Tensor,
-        text: Optional[torch.Tensor] = None,
-        text_length: Optional[torch.Tensor] = None,
     ):
         # force global cmvn
-        xs = xs - self.signal_mean
-        if self.signal_norm_var:
-            xs = xs * self.signal_istd
+        # if self.cmvn:
+        #     xs = xs - self.signal_mean
+        #     if self.signal_norm_var:
+        #         xs = xs * self.signal_istd
         input = xs
-
         features_pen: Optional[torch.Tensor] = None
         if self.features_regularization_weight != 0.0:
             features_pen = input.pow(2).mean()
@@ -187,7 +190,7 @@ class BestRQModel(torch.nn.Module):
         # 0 mask input
         xs, masked_masks = self._apply_mask_signal(xs, xs_lens)
 
-        # 1 get subsampling mask
+        # 1 get subsampling mask   #####TODO Mask and stack if correct
         subsampling_masks = masked_masks.unfold(1,
                                                 size=self.stack_frames,
                                                 step=self.stride)
