@@ -15,7 +15,6 @@
 import logging
 import librosa
 import soundfile as sf
-import io
 import copy
 import json
 import random
@@ -24,7 +23,7 @@ import gc
 import tarfile
 from subprocess import PIPE, Popen
 from urllib.parse import urlparse
-
+import io
 from petrel_client.client import Client
 
 import torch
@@ -131,7 +130,6 @@ def tar_file_and_group(data, client=None, vad=None):
                 example = {}
                 valid = True
             with stream.extractfile(tarinfo) as file_obj:
-                #file_obj = stream.extractfile(tarinfo)
                 try:
                     if postfix == 'txt':
                         example['txt'] = file_obj.read().decode('utf8').strip()
@@ -141,16 +139,8 @@ def tar_file_and_group(data, client=None, vad=None):
                             s3b = client.get(s3_key)
                             if s3b is None:
                                 valid = False 
-                                #raise ValueError("download failed")
                             else:
                                 wavbytes = copy.deepcopy(s3b)
-#                                pad_zero = [0,320, 640]
-#                                weights  = [1,1,1]
-#                                # for 16k 16bit
-#                                padding = 32 * random.choices(pad_zero, weights, k=1)[0]
-#                                wavbytes  = bytes(bytearray(wavbytes) +int(padding) * bytearray([0x00]))
-
-                                #    file_obj = _get_wav_path(file_obj, True)
                                 with io.BytesIO(wavbytes) as fobj: 
                                     if vad:
                                         wav, sr = librosa.load(fobj, sr=16000)
@@ -167,14 +157,6 @@ def tar_file_and_group(data, client=None, vad=None):
                                     nbytes = random.randint(0,400) 
                                     n_haed_zeros = torch.zeros(1,nbytes*16)
                                     waveform = torch.concat([n_haed_zeros, waveform, n_zeros], 1)
-                                #if vad and waveform.size(1) > 100:
-                                #    waveform = torchaudio.functional.vad(waveform, sample_rate=16000) 
-                                #if waveform.size(1) <= 0:
-                                #    valid = False
-                                #else:
-                                    
-                                #if len(wavbytes) > 0 and waveform.size(1) > 200 * 16:
-                                #    waveform = vad(waveform)
                                 example['wav'] = waveform
                                 example['sample_rate'] = sample_rate
                                 valid = True
@@ -186,7 +168,8 @@ def tar_file_and_group(data, client=None, vad=None):
                     valid = False
                     if s3b is None:
                         wavbytes = b'download failed'
-                    logging.warning('error to parse {} {} {} {}'.format(name, postfix, repr(ex), wavbytes.decode('utf8')[:100]))
+                    logging.warning('error to parse {} {}'.format(name, postfix))
+                    continue
             prev_prefix = prefix
         if prev_prefix is not None:
             example['key'] = prev_prefix
@@ -197,8 +180,6 @@ def tar_file_and_group(data, client=None, vad=None):
         if 'process' in sample:
             sample['process'].communicate()
         sample['stream'].close()
-        # gc.collect()
-    #del client 
 
 def parse_raw(data):
     """ Parse key/wav/txt from json line
@@ -211,33 +192,12 @@ def parse_raw(data):
     """
     client = MyClient()
     for sample in data:
-        #assert 'src' in sample
-        #json_line = sample['src']
-        #obj = json.loads(json_line)
-        #assert 'key' in obj
-        #assert 'wav' in obj
-        #assert 'txt' in obj
         segs = sample['src'].split("\t")
         if len(segs) < 2:
             continue
         key, txt = segs[0], segs[1]
         wav_file = key
-#        key = obj['key']
-#        wav_file = obj['wav']
-#        txt = obj['txt']
         try:
-#            if 'start' in obj:
-#                assert 'end' in obj
-#                sample_rate = torchaudio.backend.sox_io_backend.info(
-#                    wav_file).sample_rate
-#                start_frame = int(obj['start'] * sample_rate)
-#                end_frame = int(obj['end'] * sample_rate)
-#                waveform, _ = torchaudio.backend.sox_io_backend.load(
-#                    filepath=wav_file,
-#                    num_frames=end_frame - start_frame,
-#                    frame_offset=start_frame)
-#            else:
-#                waveform, sample_rate = torchaudio.load(wav_file)
             tarcontent = client.get(key)
             tarbytes = copy.deepcopy(tarcontent)
             with io.BytesIO(tarbytes) as fobj: 
@@ -283,7 +243,7 @@ def filter(data,
         assert 'sample_rate' in sample
         assert 'wav' in sample
         assert 'label' in sample
-        # sample['wav'] is torch.Tensor, we have 100 frames every second
+        # sample['wav'] is torch.Tensor, we have 100 frames every second\
         num_frames = sample['wav'].size(1) / sample['sample_rate'] * 100
         if num_frames < min_length:
             continue
@@ -708,7 +668,8 @@ def padding(data):
         padding_labels = pad_sequence(sorted_labels,
                                       batch_first=True,
                                       padding_value=-1)
-        yield (sorted_keys, padded_feats, feats_lengths)
+        yield (sorted_keys, padded_feats, padding_labels, feats_lengths,
+               label_lengths)
 
 def text_read(data):
     for sample in data:

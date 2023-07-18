@@ -68,7 +68,8 @@ class BestRQModel(torch.nn.Module):
         min_masks: int = 2,
         norm_epsilon: float = 1e-5,
         features_regularization_weight: float = 0.01,
-        cmvn: float = False
+        cmvn: float = False,
+        input_ln = False,
     ) -> None:
         super().__init__()
         assert mask_prob > 0.0
@@ -83,6 +84,11 @@ class BestRQModel(torch.nn.Module):
         # encoder
         self.encoder = encoder
 
+        self.input_ln = input_ln
+        if input_ln:
+            self.input_ln = torch.nn.LayerNorm(
+                num_mel_bins, eps=norm_epsilon, elementwise_affine=False
+            )
         #CMVN
         # self.cmvn = cmvn
         # if cmvn:
@@ -92,7 +98,6 @@ class BestRQModel(torch.nn.Module):
         #     self.signal_norm_var = self.encoder.global_cmvn.norm_var
         # # NOTE(Mddct): disable encoder's global_cmvn
         self.encoder.global_cmvn = None
-
         # n softmax
         self.encoder_top_n_out = torch.nn.parameter.Parameter(
             torch.empty(self.num_codebooks, self.encoder.output_size(),
@@ -182,6 +187,10 @@ class BestRQModel(torch.nn.Module):
         #     xs = xs - self.signal_mean
         #     if self.signal_norm_var:
         #         xs = xs * self.signal_istd
+        
+        if self.input_ln:
+            xs = self.input_ln(xs)    
+
         input = xs
         features_pen: Optional[torch.Tensor] = None
         if self.features_regularization_weight != 0.0:

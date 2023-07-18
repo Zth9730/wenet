@@ -56,6 +56,7 @@ class ASRModel(torch.nn.Module):
         lsm_weight: float = 0.0,
         length_normalized_loss: bool = False,
         lfmmi_dir: str = '',
+        input_ln = False
     ):
         assert 0.0 <= ctc_weight <= 1.0, ctc_weight
 
@@ -80,6 +81,12 @@ class ASRModel(torch.nn.Module):
         self.lfmmi_dir = lfmmi_dir
         if self.lfmmi_dir != '':
             self.load_lfmmi_resource()
+        
+        self.input_ln = input_ln
+        if self.input_ln:
+            self.input_ln = torch.nn.LayerNorm(
+                80, eps=1e-5, elementwise_affine=False
+            )
 
     def forward(
         self,
@@ -102,6 +109,10 @@ class ASRModel(torch.nn.Module):
         assert (speech.shape[0] == speech_lengths.shape[0] == text.shape[0] ==
                 text_lengths.shape[0]), (speech.shape, speech_lengths.shape,
                                          text.shape, text_lengths.shape)
+
+        if self.input_ln:
+            assert self.encoder.global_cmvn is None
+            speech = self.input_ln(speech)
         # 1. Encoder
         encoder_out, encoder_mask = self.encoder(speech, speech_lengths)
         encoder_out_lens = encoder_mask.squeeze(1).sum(1)

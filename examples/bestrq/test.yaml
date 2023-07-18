@@ -1,0 +1,141 @@
+# network architecture
+# encoder related
+ssl_conf: 
+    num_mel_bins: 80
+    embedding_dim: 16
+    num_embeddings: 8192
+    mask_prob: 0.01
+    mask_length: 15 
+    num_codebooks: 1
+    min_masks: 10
+    input_ln: true
+    
+
+encoder: conformer
+encoder_conf:
+    output_size: 512    # dimension of attention
+    attention_heads: 8
+    linear_units: 2048  # the number of units of position-wise feed forward
+    num_blocks: 16      # the number of encoder blocks
+    dropout_rate: 0.1
+    positional_dropout_rate: 0.1
+    attention_dropout_rate: 0.1
+    input_layer: conv2d # encoder input type, you can chose conv2d, conv2d6 and conv2d8
+    normalize_before: true
+    cnn_module_kernel: 15
+    use_cnn_module: True
+    cnn_module_norm: 'layer_norm'
+    activation_type: 'swish'
+    pos_enc_layer_type: 'rel_pos'
+    selfattention_layer_type: 'rel_selfattn'
+
+
+joint_type: v3
+joint_conf:
+    join_dim: 640
+    prejoin_linear: true
+    joint_mode: 'add'
+    activation: 'tanh'
+    tie_embedding: true
+    skip_connection: true
+
+# predictor: embedding
+# predictor_conf:
+#     embed_size: 640
+#     embed_dropout: 0.1
+#     n_head: 4
+#     history_size: 5
+#     bias: false
+#     use_output: false
+
+
+# decoder: bitransformer
+decoder: transformer
+decoder_conf:
+  attention_heads: 4
+  dropout_rate: 0.1
+  linear_units: 2048
+  num_blocks: 4
+  positional_dropout_rate: 0.1
+#  r_num_blocks: 3
+  self_attention_dropout_rate: 0.1
+  src_attention_dropout_rate: 0.1
+
+# hybrid transducer+ctc+attention
+model_conf:
+    ctc_weight: 0.6
+    attention_weight: 0.0
+    lsm_weight: 0.1     # label smoothing option
+    length_normalized_loss: false
+    # reverse_weight: 0.3
+    quantity_weight: 1.0
+    # cif_weight : 1.0
+    predictor_lm: true
+    predictor_lm_tie_weight: false
+    predictor_lm_weight: 1.0
+    cif_eos: false
+    predictor_regularisation: true 
+    # predictor_m1: 267800
+    # predictor_m2: 2617000
+    predictor_m1: 10000
+    predictor_m2: 40000
+  
+
+cif_conf:
+    threshold: 1.0
+    smooth_factor: 1.0
+    noise_threshold: 0.0
+    tail_threshold: 1.0
+    funnel: true
+    funnel_skip: true
+    addition_encoder: true
+    addition_encoder_big: true # refactor
+
+alpha: conv
+alpha_conf:
+    dropout: 0.1
+
+dataset_conf:
+    filter_conf:
+        max_length: 4500
+        min_length: 10
+        token_max_length: 1000
+        token_min_length: 0
+    resample_conf:
+        resample_rate: 16000
+    speed_perturb: true
+    fbank_conf:
+        num_mel_bins: 80
+        frame_shift: 10
+        frame_length: 25
+        dither: 0.1
+    spec_aug: true
+    spec_aug_conf:
+        num_t_mask: 2
+        num_f_mask: 2
+        max_t: 50
+        max_f: 10
+    shuffle: True
+    shuffle_conf:
+        shuffle_size: 1500
+    sort: true
+    sort_conf:
+        sort_size: 500  # sort_size should be less than shuffle_size
+    batch_conf:
+        batch_type: 'dynamic' # static or dynamic
+        # batch_size: 250000
+#        batch_type: 'dynamic'
+        max_frames_in_batch: 80000
+
+grad_clip: 4
+accum_grad: 1
+max_epoch: 600
+log_interval: 100
+
+optim: adam
+optim_conf:
+    lr: 0.0002
+scheduler: warmuplr     # pytorch v1.1.0+ required
+scheduler_conf:
+    warmup_steps: 35000
+

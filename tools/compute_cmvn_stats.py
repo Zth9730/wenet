@@ -12,7 +12,35 @@ import torchaudio
 import torchaudio.compliance.kaldi as kaldi
 from torch.utils.data import Dataset, DataLoader
 
+import io
+from petrel_client.client import Client
+
 torchaudio.set_audio_backend("sox_io")
+
+
+class MyClient(object):
+    def __init__(self):
+        self.client = Client("~/petreloss.conf")
+    def get(self, key, enable_stream=False):
+        index = key.find("/")
+        bucket = key[:index]
+        key = key[index+1:]
+        if bucket == "asr":
+            return self.client.get("asr:s3://{}/".format(bucket) + key, no_cache=True, enable_stream=enable_stream)
+        elif bucket == "youtubeBucket":
+            return self.client.get("youtube:s3://{}/".format(bucket) + key, no_cache=True, enable_stream=enable_stream)
+        elif bucket == "exp":
+            return self.client.get("asr:s3://{}/".format(bucket) + key, no_cache=True, enable_stream=enable_stream)
+    def get_file_iterator(self, key):
+        index = key.find("/")
+        bucket = key[:index]
+        key = key[index+1:]
+        if bucket == "asr":
+            return self.client.get_file_iterator("s3://asr/" + key)
+        elif bucket == "youtubeBucket":
+            return self.client.get_file_iterator("youtube:s3://{}/".format(bucket) + key)
+
+
 
 
 class CollateFunc(object):
@@ -22,6 +50,7 @@ class CollateFunc(object):
     def __init__(self, feat_dim, resample_rate):
         self.feat_dim = feat_dim
         self.resample_rate = resample_rate
+        self.client = MyClient()
         pass
 
     def __call__(self, batch):

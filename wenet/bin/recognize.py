@@ -24,12 +24,46 @@ import torch
 import yaml
 from torch.utils.data import DataLoader
 
-from wenet.dataset.dataset import Dataset
-from wenet.paraformer.search.beam_search import build_beam_search
+from wenet.dataset.dataset_s3 import Dataset
 from wenet.utils.checkpoint import load_checkpoint
 from wenet.utils.file_utils import read_symbol_table, read_non_lang_symbols
 from wenet.utils.config import override_config
 from wenet.utils.init_model import init_model
+
+class Log():
+    '''
+    封装后的logging
+    '''
+    def __init__(self, log_name, model_dir):
+        '''
+            指定保存日志的文件路径，日志级别，以及调用文件
+            将日志存入到指定的文件中
+        '''
+        # 创建一个logger
+        self.logger = logging.getLogger(log_name)
+        self.logger.setLevel(level=logging.INFO)
+        formatter = logging.Formatter('%(asctime)s %(levelname)s %(message)s')
+
+        file_handler = logging.FileHandler(model_dir)
+        file_handler.setLevel(level=logging.INFO)
+        file_handler.setFormatter(formatter)
+
+        stream_handler = logging.StreamHandler()
+        stream_handler.setLevel(logging.INFO)
+        stream_handler.setFormatter(formatter)
+
+        self.logger.addHandler(file_handler)
+        self. logger.addHandler(stream_handler)
+
+        #  添加下面一句，在记录日志之后移除句柄
+        # self.logger.removeHandler(ch)
+        # self.logger.removeHandler(fh)
+        # 关闭打开的文件
+        stream_handler.close()
+        file_handler.close()
+
+    def getlog(self):
+        return self.logger
 
 
 def get_args():
@@ -63,13 +97,14 @@ def get_args():
                         help='asr result file')
     parser.add_argument('--mode',
                         choices=[
-                            'attention', 'ctc_greedy_search',
+                            'attention', 'cif_greedy_search', 'cif_beam_search',
+                            'mm_beam_search',
+                            'cif_attention_rescoring',
+                            'ctc_greedy_search',
                             'ctc_prefix_beam_search', 'attention_rescoring',
                             'rnnt_greedy_search', 'rnnt_beam_search',
-                            'rnnt_beam_attn_rescoring',
-                            'ctc_beam_td_attn_rescoring', 'hlg_onebest',
-                            'hlg_rescore', 'paraformer_greedy_search',
-                            'paraformer_beam_search',
+                            'rnnt_beam_attn_rescoring', 'ctc_beam_td_attn_rescoring',
+                            'hlg_onebest', 'hlg_rescore'
                         ],
                         default='attention',
                         help='decoding mode')
@@ -93,13 +128,13 @@ def get_args():
     parser.add_argument('--transducer_weight',
                         type=float,
                         default=0.0,
-                        help='transducer weight for rescoring weight in '
-                             'transducer attention rescore mode')
+                        help='transducer weight for rescoring weight in transducer \
+                                 attention rescore mode')
     parser.add_argument('--attn_weight',
                         type=float,
                         default=0.0,
-                        help='attention weight for rescoring weight in '
-                             'transducer attention rescore mode')
+                        help='attention weight for rescoring weight in transducer \
+                              attention rescore mode')
     parser.add_argument('--decoding_chunk_size',
                         type=int,
                         default=-1,
@@ -131,7 +166,7 @@ def get_args():
                         default='',
                         type=str,
                         help='used to connect the output characters')
-
+    parser.add_argument('--cmvn', default=None, help='global cmvn file')
     parser.add_argument('--word',
                         default='',
                         type=str,
@@ -160,13 +195,12 @@ def get_args():
 
 def main():
     args = get_args()
-    logging.basicConfig(level=logging.DEBUG,
-                        format='%(asctime)s %(levelname)s %(message)s')
+    logger = Log('decode_log', args.result_file + '_log').getlog()
     os.environ['CUDA_VISIBLE_DEVICES'] = str(args.gpu)
 
-    if args.mode in ['ctc_prefix_beam_search', 'attention_rescoring',
-                     'paraformer_beam_search', ] and args.batch_size > 1:
-        logging.fatal(
+    if args.mode in ['ctc_prefix_beam_search', 'attention_rescoring'
+                     ] and args.batch_size > 1:
+        logger.fatal(
             'decoding mode {} must be running with batch_size == 1'.format(
                 args.mode))
         sys.exit(1)
@@ -197,14 +231,12 @@ def main():
         test_conf['mfcc_conf']['dither'] = 0.0
     test_conf['batch_conf']['batch_type'] = "static"
     test_conf['batch_conf']['batch_size'] = args.batch_size
-    non_lang_syms = read_non_lang_symbols(args.non_lang_syms)
 
+    non_lang_syms = read_non_lang_symbols(args.non_lang_syms)
     test_dataset = Dataset(args.data_type,
                            args.test_data,
                            symbol_table,
                            test_conf,
-                           args.bpe_model,
-                           non_lang_syms,
                            partition=False)
 
     test_data_loader = DataLoader(test_dataset, batch_size=None, num_workers=0)
@@ -222,14 +254,7 @@ def main():
     model = model.to(device)
 
     model.eval()
-
-    # Build BeamSearchCIF object
-    if args.mode == 'paraformer_beam_search':
-        paraformer_beam_search = build_beam_search(model, args, device)
-    else:
-        paraformer_beam_search = None
-
-    with torch.no_grad(), open(args.result_file, 'w') as fout:
+    with torch.no_grad(), open(args.result_file, 'w') as fout, open(args.result_file+'_real', 'w') as fout_real:
         for batch_idx, batch in enumerate(test_data_loader):
             keys, feats, target, feats_lengths, target_lengths = batch
             feats = feats.to(device)
@@ -245,6 +270,29 @@ def main():
                     num_decoding_left_chunks=args.num_decoding_left_chunks,
                     simulate_streaming=args.simulate_streaming)
                 hyps = [hyp.tolist() for hyp in hyps]
+            elif args.mode == 'cif_greedy_search':
+                hyps = model.cif_greedy_search(
+                    feats,
+                    feats_lengths,
+                    decoding_chunk_size=args.decoding_chunk_size,
+                    num_decoding_left_chunks=args.num_decoding_left_chunks,
+                    simulate_streaming=args.simulate_streaming)
+            elif args.mode == 'cif_beam_search':
+                hyps = model.cif_beam_search(
+                    feats,
+                    feats_lengths,
+                    decoding_chunk_size=args.decoding_chunk_size,
+                    num_decoding_left_chunks=args.num_decoding_left_chunks,
+                    simulate_streaming=args.simulate_streaming,
+                    beam_size=args.beam_size)
+            elif args.mode == 'mm_beam_search':
+                hyps = model.mm_beam_search(
+                    feats,
+                    feats_lengths,
+                    decoding_chunk_size=args.decoding_chunk_size,
+                    num_decoding_left_chunks=args.num_decoding_left_chunks,
+                    simulate_streaming=args.simulate_streaming,
+                    beam_size=args.beam_size)
             elif args.mode == 'ctc_greedy_search':
                 hyps, _ = model.ctc_greedy_search(
                     feats,
@@ -354,31 +402,16 @@ def main():
                     hlg=args.hlg,
                     word=args.word,
                     symbol_table=symbol_table)
-            elif args.mode == 'paraformer_beam_search':
-                hyps = model.paraformer_beam_search(
-                    feats,
-                    feats_lengths,
-                    beam_search=paraformer_beam_search,
-                    decoding_chunk_size=args.decoding_chunk_size,
-                    num_decoding_left_chunks=args.num_decoding_left_chunks,
-                    simulate_streaming=args.simulate_streaming)
-            elif args.mode == 'paraformer_greedy_search':
-                hyps = model.paraformer_greedy_search(
-                    feats,
-                    feats_lengths,
-                    decoding_chunk_size=args.decoding_chunk_size,
-                    num_decoding_left_chunks=args.num_decoding_left_chunks,
-                    simulate_streaming=args.simulate_streaming)
             for i, key in enumerate(keys):
                 content = []
                 for w in hyps[i]:
                     if w == eos:
                         break
                     content.append(char_dict[w])
-                logging.info('{} {}'.format(key, args.connect_symbol
-                                            .join(content)))
-                fout.write('{} {}\n'.format(key, args.connect_symbol
-                                            .join(content)))
+                logger.info('{} {}'.format(key.split('/')[-1], args.connect_symbol.join(content)))
+                fout.write('{} {}\n'.format(key.split('/')[-1], args.connect_symbol.join(content)))
+                fout_real.write('{} {}\n'.format(key.split('/')[-1], ' '.join(content)))
+
 
 
 if __name__ == '__main__':

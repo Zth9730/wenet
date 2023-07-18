@@ -13,7 +13,7 @@ class Executor:
         self.step = 0
 
     def train(self, model, optimizer, scheduler, data_loader, device, writer,
-              args, scaler):
+              args, scaler, logger):
         ''' Train one epoch
         '''
         model.train()
@@ -38,7 +38,7 @@ class Executor:
         num_seen_utts = 0
         with model_context():
             for batch_idx, batch in enumerate(data_loader):
-                key, feats, feats_lengths = batch
+                key, feats, labels, feats_lengths, label_lengths = batch
                 feats = feats.to(device)
                 feats_lengths = feats_lengths.to(device)
                 num_utts = feats.size(0)
@@ -103,8 +103,9 @@ class Executor:
                                     value, torch.Tensor) else value)
                     log_str += 'lr {:.8f} rank {}'.format(lr, rank)
                     logging.info(log_str)
+                    logger.info(log_str)
 
-    def cv(self, model, data_loader, device, args):
+    def cv(self, model, data_loader, device, args, logger):
         ''' Cross validation on
         '''
         model.eval()
@@ -139,5 +140,6 @@ class Executor:
                     log_str += 'history loss {:.6f}'.format(total_loss /
                                                             num_seen_utts)
                     log_str += ' rank {}'.format(rank)
-                    logging.debug(log_str)
+                    logging.info(log_str)
+                    logger.info(log_str)
         return total_loss, num_seen_utts

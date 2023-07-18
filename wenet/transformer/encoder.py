@@ -54,7 +54,7 @@ class BaseEncoder(torch.nn.Module):
         static_chunk_size: int = 0,
         use_dynamic_chunk: bool = False,
         global_cmvn: torch.nn.Module = None,
-        use_dynamic_left_chunk: bool = False,
+        use_dynamic_left_chunk: bool = False
     ):
         """
         Args:

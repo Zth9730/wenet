@@ -32,8 +32,7 @@ from wenet.utils.config import override_config
 from wenet.utils.file_utils import read_symbol_table
 from wenet.utils.scheduler import WarmupLR
 from wenet.utils.init_model import init_model
-# from wenet.utils.executor_ssl import Executor
-from wenet.utils.executor import Executor
+from wenet.utils.executor_ssl import Executor
 
 
 
@@ -176,11 +175,11 @@ def main():
 
     train_dataset = Dataset(args.data_type, args.train_data, symbol_table,
                             train_conf, True)
-    cv_dataset = Dataset(args.data_type,
-                         args.cv_data,
-                         symbol_table,
-                         cv_conf,
-                         partition=False)
+    # cv_dataset = Dataset(args.data_type,
+    #                      args.cv_data,
+    #                      symbol_table,
+    #                      cv_conf,
+    #                      partition=False)
 
     train_data_loader = DataLoader(train_dataset,
                                    batch_size=None,
@@ -188,11 +187,11 @@ def main():
                                    num_workers=args.num_workers,
                                    persistent_workers=True,
                                    prefetch_factor=args.prefetch)
-    cv_data_loader = DataLoader(cv_dataset,
-                                batch_size=None,
-                                pin_memory=args.pin_memory,
-                                num_workers=args.num_workers,
-                                prefetch_factor=args.prefetch)
+    # cv_data_loader = DataLoader(cv_dataset,
+    #                             batch_size=None,
+    #                             pin_memory=args.pin_memory,
+    #                             num_workers=args.num_workers,
+    #                             prefetch_factor=args.prefetch)
 
     vocab_size = len(symbol_table)
 
@@ -217,6 +216,7 @@ def main():
     # Init asr model from configs
     model = init_model(configs)
     print(model)
+    logger.info(model)
     num_params = sum(p.numel() for p in model.parameters())
     print('the number of model params: {}'.format(num_params))
 
@@ -293,10 +293,10 @@ def main():
         logging.info('Epoch {} TRAIN info lr {}'.format(epoch, lr))
         executor.train(model, optimizer, scheduler, train_data_loader, device,
                        writer, configs, scaler, logger)
-        total_loss, num_seen_utts = executor.cv(model, cv_data_loader, device,
-                                                configs, logger)
-        cv_loss = total_loss / num_seen_utts
-        logging.info('Epoch {} CV info cv_loss {}'.format(epoch, cv_loss))
+        # total_loss, num_seen_utts = executor.cv(model, cv_data_loader, device,
+        #                                         configs, logger)
+        # cv_loss = total_loss / num_seen_utts
+        # logging.info('Epoch {} CV info cv_loss {}'.format(epoch, cv_loss))
         if args.rank == 0:
             save_model_path = os.path.join(model_dir, '{}.pt'.format(epoch))
             save_checkpoint(

@@ -31,6 +31,7 @@ def load_checkpoint(model: torch.nn.Module, path: str) -> dict:
         logging.info('Checkpoint: loading from checkpoint %s for CPU' % path)
         checkpoint = torch.load(path, map_location='cpu')
     model.load_state_dict(checkpoint, strict=False)
+
     info_path = re.sub('.pt$', '.yaml', path)
     configs = {}
     if os.path.exists(info_path):
