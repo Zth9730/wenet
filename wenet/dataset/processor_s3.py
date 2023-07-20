@@ -72,6 +72,7 @@ def url_opener(data):
         url = sample['src']
         try:
             if "exp" in url or "asr" in url:
+
 #                url = "s3://"+url
                # stream = io.BytesIO(url)
                 # stream = open(url, "rb")
@@ -668,6 +669,7 @@ def padding(data):
         padding_labels = pad_sequence(sorted_labels,
                                       batch_first=True,
                                       padding_value=-1)
+
         yield (sorted_keys, padded_feats, padding_labels, feats_lengths,
                label_lengths)
 

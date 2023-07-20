@@ -117,7 +117,7 @@ dataset_conf:
     shuffle: True
     shuffle_conf:
         shuffle_size: 1500
-    sort: false
+    sort: true
     sort_conf:
         sort_size: 500  # sort_size should be less than shuffle_size
     batch_conf:

@@ -2,7 +2,7 @@
 export PYTHONPATH=/mnt/petrelfs/zhoudinghao/work/thzhang/wenet/
 export NCCL_DEBUG=INFO
 
-exp_tag=bestrq_all_global_cmvn
+exp_tag=bestrq_all_global_cmvn_nods
 echo "begin training"
 export master=`scontrol show hostname $SLURM_NODELIST | head -n1`
 nodes=`scontrol show hostname $SLURM_NODELIST | wc -l`

@@ -24,17 +24,17 @@ average_checkpoint=true
 average_num=20
 # decode_checkpoint=${model}/390.pt
 decode_checkpoint=${model}/avg_${average_num}.pt
-decode_modes="ctc_greedy_search"
+decode_modes="attention_rescoring"
 
 
 # Test model, please specify the model you want to test by --checkpoint
 if [ ${average_checkpoint} == true ]; then
     decode_checkpoint=$model/avg_${average_num}.pt
     echo "do model average and final checkpoint is $decode_checkpoint"
-    python ../../wenet/bin/average_model.py \
-        --dst_model $decode_checkpoint \
-        --src_path $model  \
-        --num ${average_num} \
+    # python ../../wenet/bin/average_model.py \
+    #     --dst_model $decode_checkpoint \
+    #     --src_path $model  \
+    #     --num ${average_num} \
         # --val_best
 fi
 #   # Please specify decoding_chunk_size for unified streaming and
@@ -55,7 +55,7 @@ mkdir -p $test_dir
     --test_data ${test_shards} \
     --checkpoint $decode_checkpoint \
     --beam_size 10 \
-    --batch_size 100 \
+    --batch_size 1 \
     --penalty 0.0 \
     --dict data/aishell/lang_char.txt \
     --ctc_weight $ctc_weight \
