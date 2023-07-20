@@ -24,7 +24,7 @@ import tarfile
 from subprocess import PIPE, Popen
 from urllib.parse import urlparse
 import io
-from petrel_client.client import Client
+# from petrel_client.client import Client
 
 import torch
 import torchaudio
@@ -210,7 +210,52 @@ def parse_raw(data):
             yield example
         except Exception as ex:
             logging.warning('Failed to read {}'.format(wav_file))
+# zjm add
+def to_one_hot(data,category_dict):
+    # convert category label to one hot.
+    for sample in data:
+        assert 'label' in sample
+        label= sample['label']
+        sample['label'] = category_dict[label]
+        yield sample
+# zjm add
+def parse_raw_classification(data, category_dict):
+    """ Parse key/wav/category from json line
 
+        Args:
+            data: Iterable[str], str is a json line has key/wav/category
+
+        Returns:
+            Iterable[{key, wav, category, sample_rate}]
+    """
+    # client = MyClient()
+    for sample in data:
+        assert 'src' in sample
+        json_line = sample['src']
+        obj = json.loads(json_line)
+        assert 'key' in obj
+        assert 'wav' in obj
+        assert 'txt' in obj
+        key = obj['key']
+        wav_file = obj['wav']
+        category = obj['txt']
+        #wav_file = key
+        try:
+            # tarcontent = client.get(key)
+            # tarbytes = copy.deepcopy(tarcontent)
+            # with io.BytesIO(tarbytes) as fobj: 
+            #     waveform, sample_rate = torchaudio.load(fobj)
+            waveform, sample_rate = torchaudio.load(wav_file)
+            # waveform = torch.concat([waveform, torch.zeros(1,300*16)], 1)
+            label = category_dict[category] # eg. convert 'happy' to '2'
+            one_hot = torch.nn.functional.one_hot(torch.tensor(label).long(), num_classes=len(category_dict))
+            example = dict( key=key,
+                            label=one_hot, 
+                            wav=waveform,
+                            sample_rate=sample_rate)
+            yield example
+        except Exception as ex:
+            logging.warning('Failed to read {}'.format(wav_file))
 
 def filter(data,
            max_length=10240,
