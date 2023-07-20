@@ -18,7 +18,8 @@ import argparse
 import copy
 import logging
 import os
-
+import deepspeed
+import json
 import torch
 import torch.distributed as dist
 import torch.optim as optim
@@ -28,9 +29,14 @@ from torch.utils.data import DataLoader
 from wenet.dataset.dataset_s3 import Dataset
 from wenet.utils.checkpoint import (load_checkpoint, save_checkpoint,
                                     load_trained_modules)
+
+from deepspeed.runtime.zero.stage_1_and_2 import estimate_zero2_model_states_mem_needs_all_live  # noqa
+from deepspeed.runtime.zero.stage3 import estimate_zero3_model_states_mem_needs_all_live  # noqa
+from deepspeed.utils.zero_to_fp32 import convert_zero_checkpoint_to_fp32_state_dict
+
 from wenet.utils.config import override_config
 from wenet.utils.file_utils import read_symbol_table
-from wenet.utils.scheduler import WarmupLR
+from wenet.utils.scheduler import WarmupLR, NoamHoldAnnealing
 from wenet.utils.init_model import init_model
 from wenet.utils.executor_ssl import Executor
 
@@ -49,7 +55,7 @@ def get_args():
                         type=int,
                         default=-1,
                         help='whether to use gpu')
-    parser.add_argument("--local_rank", default=1, type=int)
+    # parser.add_argument("--local_rank", default=1, type=int)
 
     parser.add_argument('--model_dir', required=True, help='save model dir')
     parser.add_argument('--checkpoint', help='checkpoint model')
@@ -126,6 +132,19 @@ def get_args():
                         type=str,
                         help="partition modules to init model")
 
+    # Begin deepspeed related config
+    parser.add_argument('--local_rank', type=int, default=-1,
+                        help='local rank passed from distributed launcher')
+    parser.add_argument('--deepspeed.save_states',
+                        dest='save_states',
+                        default='model_only',
+                        choices=['model_only', 'model+optimizer'],
+                        help='save model/optimizer states')
+    # End deepspeed related config
+
+
+    # DeepSpeed automaticly add '--deepspeed' and '--deepspeed_config' to parser
+    parser = deepspeed.add_config_arguments(parser)
 
     args = parser.parse_args()
     return args
@@ -144,8 +163,8 @@ def main():
     file_handler.setFormatter(formatter)
     logger.addHandler(file_handler)
 
-    os.environ['CUDA_VISIBLE_DEVICES'] = str(args.local_rank)
-    print(args.local_rank)
+    if not args.deepspeed:
+        os.environ['CUDA_VISIBLE_DEVICES'] = str(args.local_rank) 
 
     # Set random seed
     torch.manual_seed(777)
@@ -154,10 +173,22 @@ def main():
     if len(args.override_config) > 0:
         configs = override_config(configs, args.override_config)
 
+    if args.deepspeed:
+        with open(args.deepspeed_config, 'r') as fin:
+            ds_configs = json.load(fin)
+        if "fp16" in ds_configs and ds_configs["fp16"]["enabled"]:
+            configs["ds_dtype"] = "fp16"
+        elif "bf16" in ds_configs and ds_configs["bf16"]["enabled"]:
+            configs["ds_dtype"] = "bf16"
+        else:
+            configs["ds_dtype"] = "fp32"
+
+    
     args.world_size = int(os.environ["WORLD_SIZE"])
     args.rank = int(os.environ['RANK'])
 
-    distributed = args.world_size > 1
+    distributed = not args.deepspeed
+    
     if distributed:
         logging.info('training on multiple gpus, this gpu {}'.format(
             args.rank))
@@ -166,12 +197,23 @@ def main():
         #                         init_method=args.init_method,
         #                         world_size=args.world_size,
         #                         rank=args.rank)
+    elif args.deepspeed:
 
+        # Update local_rank & world_size from enviroment variables
+        deepspeed.init_distributed(dist_backend=args.dist_backend,
+                                   init_method=args.init_method,
+                                   rank=args.rank,
+                                   world_size=args.world_size)
     symbol_table = read_symbol_table(args.symbol_table)
 
     train_conf = configs['dataset_conf']
     cv_conf = copy.deepcopy(train_conf)
     cv_conf['shuffle'] = False
+
+    if args.deepspeed:
+        assert train_conf['batch_conf']['batch_type'] == "static"
+        assert ds_configs["train_micro_batch_size_per_gpu"] == 1
+        configs['accum_grad'] = ds_configs["gradient_accumulation_steps"]
 
     train_dataset = Dataset(args.data_type, args.train_data, symbol_table,
                             train_conf, True)
@@ -215,10 +257,11 @@ def main():
 
     # Init asr model from configs
     model = init_model(configs)
-    print(model)
-    logger.info(model)
+    print(model) if args.rank == 0 else None
+    logger.info(model) if args.rank == 0 else None
     num_params = sum(p.numel() for p in model.parameters())
-    print('the number of model params: {}'.format(num_params))
+    print('the number of model params: {:,d}'.format(num_params)) if args.rank == 0 else None  # noqa
+    logger.info('the number of model params: {:,d}'.format(num_params)) if args.rank == 0 else None
 
     # !!!IMPORTANT!!!
     # Try to export the model by script, if fails, we should refine
@@ -263,18 +306,75 @@ def main():
                 default as comm_hooks
             model.register_comm_hook(state=None,
                                      hook=comm_hooks.fp16_compress_hook)
+
+    elif args.deepspeed:  # deepspeed
+        # NOTE(xcsong): look in detail how the memory estimator API works:
+        #   https://deepspeed.readthedocs.io/en/latest/memory.html#discussion
+        if args.rank == 0:
+            logging.info("Estimating model states memory needs (zero2)...")
+            logger.info("Estimating model states memory needs (zero2)...")
+            estimate_zero2_model_states_mem_needs_all_live(
+                model, num_gpus_per_node=args.world_size, num_nodes=1)
+            logging.info("Estimating model states memory needs (zero3)...")
+            logger.info("Estimating model states memory needs (zero2)...")
+            estimate_zero3_model_states_mem_needs_all_live(
+                model, num_gpus_per_node=args.world_size, num_nodes=1)
+        device = None     # Init device later
+        pass              # Init DeepSpeed later
+
     else:
         use_cuda = args.gpu >= 0 and torch.cuda.is_available()
         device = torch.device('cuda' if use_cuda else 'cpu')
         model = model.to(device)
 
-    optimizer = optim.Adam(model.parameters(), **configs['optim_conf'])
-    scheduler = WarmupLR(optimizer, **configs['scheduler_conf'])
+    if configs['optim'] == 'adam':
+        optimizer = optim.Adam(model.parameters(), **configs['optim_conf'])
+    elif configs['optim'] == 'adamw':
+        optimizer = optim.AdamW(model.parameters(), **configs['optim_conf'])
+    else:
+        raise ValueError("unknown optimizer: " + configs['optim'])
+    scheduler_type = None
+    if configs['scheduler'] == 'warmuplr':
+        scheduler_type = WarmupLR
+        scheduler = WarmupLR(optimizer, **configs['scheduler_conf'])
+    elif configs['scheduler'] == 'NoamHoldAnnealing':
+        scheduler_type = NoamHoldAnnealing
+        scheduler = NoamHoldAnnealing(optimizer, **configs['scheduler_conf'])
+    else:
+        raise ValueError("unknown scheduler: " + configs['scheduler'])
+
+    if args.deepspeed:
+        if "optimizer" in ds_configs:
+            # NOTE(xcsong): Disable custom optimizer if it is set in ds_config,
+            # extremely useful when enable cpu_offload, DeepspeedCpuAdam
+            # could be 4~5x faster than torch native adam
+            optimizer = None
+            if "scheduler" in ds_configs:
+                scheduler = None
+            else:
+                def scheduler(opt):
+                    return scheduler_type(opt, **configs['scheduler_conf'])
+        model, optimizer, _, scheduler = deepspeed.initialize(
+            args=args, model=model, optimizer=optimizer,
+            lr_scheduler=scheduler, model_parameters=model.parameters())
+
     final_epoch = None
     configs['rank'] = args.rank
     configs['is_distributed'] = distributed
     configs['use_amp'] = args.use_amp
-    if start_epoch == 0 and args.rank == 0:
+    configs['is_deepspeed'] = args.deepspeed  # deepspeed
+
+    if args.deepspeed and start_epoch == 0:
+        # NOTE(xcsong): All ranks should call this API, but only rank 0
+        #   save the general model params. see:
+        #   https://github.com/microsoft/DeepSpeed/issues/2993
+        with torch.no_grad():
+            model.save_checkpoint(save_dir=model_dir, tag='init')
+            if args.save_states == "model_only" and args.rank == 0:
+                convert_zero_checkpoint_to_fp32_state_dict(
+                    model_dir, "{}/init.pt".format(model_dir), tag='init')
+                os.system("rm -rf {}/{}".format(model_dir, "init"))
+    elif not args.deepspeed and start_epoch == 0 and args.rank == 0:
         save_model_path = os.path.join(model_dir, 'init.pt')
         save_checkpoint(model, save_model_path)
 
@@ -291,6 +391,7 @@ def main():
         configs['epoch'] = epoch
         lr = optimizer.param_groups[0]['lr']
         logging.info('Epoch {} TRAIN info lr {}'.format(epoch, lr))
+        device = model.local_rank if args.deepspeed else device
         executor.train(model, optimizer, scheduler, train_data_loader, device,
                        writer, configs, scaler, logger)
         # total_loss, num_seen_utts = executor.cv(model, cv_data_loader, device,
@@ -308,6 +409,22 @@ def main():
                 })
             writer.add_scalar('epoch/test_loss', cv_loss, epoch)
             writer.add_scalar('epoch/lr', lr, epoch)
+        if args.deepspeed:
+            # NOTE(xcsong): All ranks should call this API, but only rank 0
+            #   save the general model params. see:
+            #   https://github.com/microsoft/DeepSpeed/issues/2993
+            with torch.no_grad():
+                model.save_checkpoint(save_dir=model_dir,
+                                      tag='{}'.format(epoch),
+                                      client_state=infos)
+                if args.save_states == "model_only" and args.rank == 0:
+                    convert_zero_checkpoint_to_fp32_state_dict(
+                        model_dir, "{}/{}.pt".format(model_dir, epoch),
+                        tag='{}'.format(epoch))
+                    os.system("rm -rf {}/{}".format(model_dir, epoch))
+        elif not args.deepspeed and args.rank == 0:
+            save_model_path = os.path.join(model_dir, '{}.pt'.format(epoch))
+            save_checkpoint(model, save_model_path, infos)
         final_epoch = epoch
 
     if final_epoch is not None and args.rank == 0:
