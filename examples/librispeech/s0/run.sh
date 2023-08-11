@@ -7,12 +7,12 @@
 # Use this to control how many gpu you use, It's 1-gpu training if you specify
 # just 1gpu, otherwise it's is multiple gpu training based on DDP in pytorch
 export CUDA_VISIBLE_DEVICES="0,1,2,3,4,5,6,7"
-stage=0 # start from 0 if you need to start from data preparation
+stage=1 # start from 0 if you need to start from data preparation
 stop_stage=5
 # data
 data_url=www.openslr.org/resources/12
 # use your own data path
-datadir=/export/data/en-asr-data/OpenSLR
+datadir=/data0/librispeech
 # wav data dir
 wave_data=data
 # Optional train_config
@@ -81,9 +81,9 @@ if [ ${stage} -le 1 ] && [ ${stop_stage} -ge 1 ]; then
     done
   done
 
-  tools/compute_cmvn_stats.py --num_workers 16 --train_config $train_config \
-    --in_scp $wave_data/$train_set/wav.scp \
-    --out_cmvn $wave_data/$train_set/global_cmvn
+  # tools/compute_cmvn_stats.py --num_workers 16 --train_config $train_config \
+  #   --in_scp $wave_data/$train_set/wav.scp \
+  #   --out_cmvn $wave_data/$train_set/global_cmvn
 
 fi
 

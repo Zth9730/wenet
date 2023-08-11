@@ -207,7 +207,10 @@ def main():
 
     # Init asr model from configs
     model = init_model(configs)
-
+    
+    total = sum([param.nelement() for param in model.parameters()])
+    print("total parameter: %.2fM" % (total/1e6))
+    exit()
     # Load dict
     char_dict = {v: k for k, v in symbol_table.items()}
     eos = len(char_dict) - 1

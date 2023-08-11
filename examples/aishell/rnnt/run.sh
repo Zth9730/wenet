@@ -7,9 +7,9 @@
 
 # Use this to control how many gpu you use, It's 1-gpu training if you specify
 # just 1gpu, otherwise it's is multiple gpu training based on DDP in pytorch
-export CUDA_VISIBLE_DEVICES="0,1,2,3,4,5,6,7"
+export CUDA_VISIBLE_DEVICES="0"
 
-stage=0 # start from 0 if you need to start from data preparation
+stage=5  # start from 0 if you need to start from data preparation
 stop_stage=5
 
 # The num of machines(nodes) for multi-machine training, 1 is for one machine.
@@ -37,14 +37,14 @@ num_utts_per_shard=1000
 train_set=train
 train_config=conf/conformer_u2pp_rnnt.yaml
 cmvn=true
-dir=exp/conformer_rnnt
+dir=exp/base
 checkpoint=
 
 # use average_checkpoint will get better result
-average_checkpoint=true
+average_checkpoint=false
 decode_checkpoint=$dir/final.pt
 average_num=30
-decode_modes="rnnt_beam_search"
+decode_modes="rnnt_beam_attn_rescoring"
 
 . tools/parse_options.sh || exit 1;
 
@@ -175,7 +175,7 @@ if [ ${stage} -le 5 ] && [ ${stop_stage} -ge 5 ]; then
   {
     test_dir=$dir/test_${mode}
     mkdir -p $test_dir
-    python wenet/bin/recognize.py --gpu 0 \
+    python wenet/bin/recognize.py --gpu -1 \
       --mode $mode \
       --config $dir/train.yaml \
       --data_type $data_type \

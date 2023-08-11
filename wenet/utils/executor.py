@@ -45,6 +45,8 @@ class Executor:
         # A context manager to be used in conjunction with an instance of
         # torch.nn.parallel.DistributedDataParallel to be able to train
         # with uneven inputs across participating processes.
+        import pdb
+        pdb.set_trace()
         if isinstance(model, torch.nn.parallel.DistributedDataParallel):
             model_context = model.join
         else:
@@ -58,7 +60,9 @@ class Executor:
                 feats_lengths = feats_lengths.to(device)
                 target_lengths = target_lengths.to(device)
                 num_utts = target_lengths.size(0)
+
                 if num_utts == 0:
+
                     continue
                 context = None
                 # Disable gradient synchronizations across DDP processes.
@@ -117,7 +121,7 @@ class Executor:
                             log_str += '{} {:.6f} '.format(name, value.item())
                     log_str += 'lr {:.8f} rank {}'.format(lr, rank)
                     logging.debug(log_str)
-
+        print("Rank {} has exhasted all {} of its inputs".format(rank, num_seen_utts))
     def cv(self, model, data_loader, device, args):
         ''' Cross validation on
         '''

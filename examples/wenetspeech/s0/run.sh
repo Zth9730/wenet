@@ -9,7 +9,7 @@
 # just 1gpu, otherwise it's is multiple gpu training based on DDP in pytorch
 export CUDA_VISIBLE_DEVICES="0,1,2,3,4,5,6,7"
 stage=0
-stop_stage=5
+stop_stage=2
 
 # The num of nodes
 num_nodes=1
@@ -17,7 +17,7 @@ num_nodes=1
 node_rank=0
 
 # Use your own data path. You need to download the WenetSpeech dataset by yourself.
-wenetspeech_data_dir=/ssd/nfs07/binbinzhang/wenetspeech
+wenetspeech_data_dir=/data2/datasets/WenetSpeech/wenetspeech_untardata
 # Make sure you have 1.2T for ${shards_dir}
 shards_dir=/ssd/nfs06/unified_data/wenetspeech_shards
 
@@ -25,18 +25,18 @@ shards_dir=/ssd/nfs06/unified_data/wenetspeech_shards
 set=L
 train_set=train_`echo $set | tr 'A-Z' 'a-z'`
 dev_set=dev
-test_sets="test_net test_meeting"
+test_sets="test"
 
 train_config=conf/train_conformer.yaml
 checkpoint=
 cmvn=true
 cmvn_sampling_divisor=20 # 20 means 5% of the training data to estimate cmvn
-dir=exp/conformer
+dir=exp/base
 
-decode_checkpoint=
-average_checkpoint=true
+decode_checkpoint=$dir/final.pt
+average_checkpoint=false
 average_num=10
-decode_modes="attention_rescoring ctc_greedy_search"
+decode_modes="attention_rescoring"
 
 . tools/parse_options.sh || exit 1;
 
@@ -176,7 +176,7 @@ if [ ${stage} -le 5 ] && [ ${stop_stage} -ge 5 ]; then
       base=$(basename $decode_checkpoint)
       result_dir=$dir/${testset}_${mode}_${base}
       mkdir -p $result_dir
-      python wenet/bin/recognize.py --gpu 0 \
+      python wenet/bin/recognize.py --gpu -1 \
         --mode $mode \
         --config $dir/train.yaml \
         --data_type "shard" \

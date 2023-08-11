@@ -13,7 +13,7 @@ export CUDA_VISIBLE_DEVICES="0,1,2"
 # export NCCL_SOCKET_IFNAME=ens4f1
 export NCCL_DEBUG=INFO
 stage=4 # start from 0 if you need to start from data preparation
-stop_stage=4 
+stop_stage=4
 
 # The num of machines(nodes) for multi-machine training, 1 is for one machine.
 # NFS is required if num_nodes > 1.
@@ -25,7 +25,7 @@ num_nodes=1
 node_rank=0
 # The aishell dataset location, please change this to your own path
 # make sure of using absolute path. DO-NOT-USE relatvie path!
-data=/data0
+data=download
 data_url=www.openslr.org/resources/33
 
 nj=16
@@ -48,7 +48,7 @@ train_set=train
 train_config=conf/multimodal.yaml
 cmvn=true
 # dir=exp/with_AIR_train_conformer_exp
-dir=/data1/zth/wenet/exp/transformer_base
+dir=/data1/zth/wenet/exp/transformer_base_bss 
 checkpoint=
 
 # use average_checkpoint will get better result
@@ -123,7 +123,7 @@ if [ ${stage} -le 4 ] && [ ${stop_stage} -ge 4 ]; then
   echo "$0: init method is $init_method"
   num_gpus=$(echo $CUDA_VISIBLE_DEVICES | awk -F "," '{print NF}')
   # Use "nccl" if it works, otherwise use "gloo"
-  dist_backend="gloo"
+  dist_backend="nccl"
   world_size=`expr $num_gpus \* $num_nodes`
   echo "total gpus is: $world_size"
   cmvn_opts=
@@ -143,7 +143,7 @@ if [ ${stage} -le 4 ] && [ ${stop_stage} -ge 4 ]; then
       --config $train_config \
       --data_type $data_type \
       --symbol_table $dict \
-      --train_data data/$train_set/data.list \
+      --train_data data/$train_set/debug.list \
       --cv_data data/dev/data.list \
       ${checkpoint:+--checkpoint $checkpoint} \
       --model_dir $dir \
