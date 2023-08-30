@@ -25,6 +25,8 @@ import torchaudio
 import torchaudio.compliance.kaldi as kaldi
 from torch.nn.utils.rnn import pad_sequence
 
+torchaudio.utils.sox_utils.set_buffer_size(16500)
+
 AUDIO_FORMAT_SETS = set(['flac', 'mp3', 'm4a', 'ogg', 'opus', 'wav', 'wma'])
 
 import glob
@@ -84,7 +86,7 @@ def url_opener(data):
                 stream = open(url, 'rb')
             # network file, such as HTTP(HDFS/OSS/S3)/HTTPS/SCP
             else:
-                cmd = f'curl -s -L {url}'
+                cmd = f'wget -q -O - {url}'
                 process = Popen(cmd, shell=True, stdout=PIPE)
                 sample.update(process=process)
                 stream = process.stdout
@@ -487,6 +489,7 @@ def spec_aug(data, num_t_mask=2, num_f_mask=2, max_t=50, max_f=10, max_w=80):
 def spec_sub(data, max_t=20, num_t_sub=3):
     """ Do spec substitute
         Inplace operation
+        ref: U2++, section 3.2.3 [https://arxiv.org/abs/2106.05642]
 
         Args:
             data: Iterable[{key, feat, label}]
@@ -515,7 +518,7 @@ def spec_sub(data, max_t=20, num_t_sub=3):
 
 def spec_trim(data, max_t=20):
     """ Trim tailing frames. Inplace operation.
-        ref: Rapid-U2++ [arxiv link]
+        ref: TrimTail [https://arxiv.org/abs/2211.00522]
 
         Args:
             data: Iterable[{key, feat, label}]
