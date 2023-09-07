@@ -404,9 +404,9 @@ def main():
         device = model.local_rank if args.deepspeed else device
         executor.train(model, optimizer, scheduler, train_data_loader, device,
                        writer, configs, scaler)
-        # total_loss, num_seen_utts = executor.cv(model, cv_data_loader, device,
-        #                                         configs)
-        # cv_loss = total_loss / num_seen_utts
+        total_loss, num_seen_utts = executor.cv(model, cv_data_loader, device,
+                                                configs)
+        cv_loss = total_loss / num_seen_utts
 
         logging.info('Epoch {} CV info cv_loss {}'.format(epoch, cv_loss))
         infos = {

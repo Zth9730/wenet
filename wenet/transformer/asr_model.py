@@ -84,6 +84,7 @@ class ASRModel(torch.nn.Module):
 
     def forward(
         self,
+        key,
         speech: torch.Tensor,
         speech_lengths: torch.Tensor,
         text: torch.Tensor,
@@ -120,7 +121,7 @@ class ASRModel(torch.nn.Module):
                 loss_ctc = self._calc_lfmmi_loss(encoder_out, encoder_mask,
                                                  text)
             else:
-                loss_ctc = self.ctc(encoder_out, encoder_out_lens, text,
+                loss_ctc = self.ctc(key, encoder_out, encoder_out_lens, text,
                                     text_lengths)
         else:
             loss_ctc = None

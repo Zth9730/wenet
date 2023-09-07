@@ -51,7 +51,6 @@ class CollateFunc(object):
                 resample_rate = self.resample_rate
                 waveform = torchaudio.transforms.Resample(
                     orig_freq=sample_rate, new_freq=resample_rate)(waveform)
-
             mat = kaldi.fbank(waveform,
                               num_mel_bins=self.feat_dim,
                               dither=0.0,
@@ -68,7 +67,7 @@ class AudioDataset(Dataset):
         self.items = []
         with codecs.open(data_file, 'r', encoding='utf-8') as f:
             for line in f:
-                arr = line.strip().split()
+                arr = line.strip().split('\t')
                 self.items.append((arr[0], arr[1]))
 
     def __len__(self):

@@ -14,7 +14,6 @@
 
 import logging
 from contextlib import nullcontext
-
 # if your python version < 3.7 use the below one
 # from contextlib import suppress as nullcontext
 import torch
@@ -53,8 +52,6 @@ class Executor:
         # A context manager to be used in conjunction with an instance of
         # torch.nn.parallel.DistributedDataParallel to be able to train
         # with uneven inputs across participating processes.
-        import pdb
-        pdb.set_trace()
         if isinstance(model, torch.nn.parallel.DistributedDataParallel):
             model_context = model.join
         else:
@@ -62,11 +59,14 @@ class Executor:
         num_seen_utts = 0
         with model_context():
             for batch_idx, batch in enumerate(data_loader):
-                key, feats, target, feats_lengths, target_lengths = batch
+                key, feats, target, query, feats_lengths, target_lengths, query_lengths = batch
+
                 feats = feats.to(device)
                 target = target.to(device)
+                query = query.to(device)
                 feats_lengths = feats_lengths.to(device)
                 target_lengths = target_lengths.to(device)
+                query_lengths = query_lengths.to(device)
                 num_utts = target_lengths.size(0)
 
                 if num_utts == 0:
@@ -88,8 +88,8 @@ class Executor:
                             enabled=ds_dtype is not None,
                             dtype=ds_dtype, cache_enabled=False
                         ):
-                            loss_dict = model(feats, feats_lengths, target,
-                                              target_lengths)
+                            loss_dict = model(key, feats, feats_lengths, target,
+                                            target_lengths)
                         loss = loss_dict['loss']
                         # NOTE(xcsong): Zeroing the gradients is handled automatically by DeepSpeed after the weights # noqa
                         #   have been updated using a mini-batch. DeepSpeed also performs gradient averaging automatically # noqa
@@ -102,9 +102,10 @@ class Executor:
                         # The more details about amp can be found in
                         # https://pytorch.org/docs/stable/notes/amp_examples.html
                         with torch.cuda.amp.autocast(scaler is not None):
-                            loss_dict = model(feats, feats_lengths, target,
-                                              target_lengths)
+                            loss_dict = model(key, feats, feats_lengths, target,
+                                            target_lengths)
                             loss = loss_dict['loss'] / accum_grad
+
                         if use_amp:
                             scaler.scale(loss).backward()
                         else:
@@ -174,7 +175,7 @@ class Executor:
         total_loss = 0.0
         with torch.no_grad():
             for batch_idx, batch in enumerate(data_loader):
-                key, feats, target, feats_lengths, target_lengths = batch
+                key, feats, target, query, feats_lengths, target_lengths, query_length = batch
                 feats = feats.to(device)
                 target = target.to(device)
                 feats_lengths = feats_lengths.to(device)
@@ -190,7 +191,7 @@ class Executor:
                         loss_dict = model(feats, feats_lengths,
                                           target, target_lengths)
                 else:
-                    loss_dict = model(feats, feats_lengths, target, target_lengths)
+                    loss_dict = model(key, feats, feats_lengths, target, target_lengths)
                 loss = loss_dict['loss']
                 if torch.isfinite(loss):
                     num_seen_utts += num_utts

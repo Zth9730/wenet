@@ -144,8 +144,7 @@ def Dataset(data_type,
     else:
         dataset = Processor(dataset, processor.parse_raw)
 
-    dataset = Processor(dataset, processor.tokenize, symbol_table, bpe_model,
-                        non_lang_syms, conf.get('split_with_space', False))
+    dataset = Processor(dataset, processor.tokenize, symbol_table, bpe_model, non_lang_syms)
     filter_conf = conf.get('filter_conf', {})
     dataset = Processor(dataset, processor.filter, **filter_conf)
 

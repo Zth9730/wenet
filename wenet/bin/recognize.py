@@ -183,7 +183,7 @@ def get_args():
 
 def main():
     args = get_args()
-    logging.basicConfig(level=logging.DEBUG,
+    logging.basicConfig(level=logging.INFO,
                         format='%(asctime)s %(levelname)s %(message)s')
     os.environ['CUDA_VISIBLE_DEVICES'] = str(args.gpu)
 
@@ -239,8 +239,8 @@ def main():
     model = init_model(configs)
     
     total = sum([param.nelement() for param in model.parameters()])
-    print("total parameter: %.2fM" % (total/1e6))
-    exit()
+    # print("total parameter: %.2fM" % (total/1e6))
+    # exit()
     # Load dict
     char_dict = {v: k for k, v in symbol_table.items()}
     eos = len(char_dict) - 1
@@ -265,7 +265,7 @@ def main():
 
     with torch.no_grad(), open(args.result_file, 'w') as fout:
         for batch_idx, batch in enumerate(test_data_loader):
-            keys, feats, target, feats_lengths, target_lengths = batch
+            keys, feats, target, query, feats_lengths, target_lengths, query_length = batch
             feats = feats.to(device)
             target = target.to(device)
             feats_lengths = feats_lengths.to(device)
@@ -408,13 +408,14 @@ def main():
             for i, key in enumerate(keys):
                 content = []
                 for w in hyps[i]:
+                    print(w)
                     if w == eos:
                         break
                     content.append(char_dict[w])
                 logging.info('{} {}'.format(key,
-                                            args.connect_symbol.join(content)))
+                                            args.connect_symbol.join(content).replace('<space>', ' ')))
                 fout.write('{} {}\n'.format(key,
-                                            args.connect_symbol.join(content)))
+                                            args.connect_symbol.join(content).replace('<space>', ' ')))
 
 
 if __name__ == '__main__':

@@ -157,37 +157,18 @@ def parse_raw(data):
     """
     for sample in data:
         assert 'src' in sample
-        json_line = sample['src']
-        obj = json.loads(json_line)
-        assert 'key' in obj
-        assert 'wav' in obj
-        assert 'txt' in obj
-        key = obj['key']
-        wav_file = obj['wav']
-        txt = obj['txt']
+        line = sample['src']
+        if len(line.strip().split('\t')) != 5:
+            continue
+        key, wav_path, txt, wav_query, txt_query = line.strip().split('\t')
         try:
-            if 'start' in obj:
-                assert 'end' in obj
-                sample_rate = torchaudio.backend.sox_io_backend.info(
-                    wav_file).sample_rate
-                start_frame = int(obj['start'] * sample_rate)
-                end_frame = int(obj['end'] * sample_rate)
-                waveform, _ = torchaudio.backend.sox_io_backend.load(
-                    filepath=wav_file,
-                    num_frames=end_frame - start_frame,
-                    frame_offset=start_frame)
-            else:
-                waveform, sample_rate = torchaudio.load(wav_file)
-                # XX = wav_file.split('/')[4]
-                # pattern = "/home/zth/work/new/wenet/examples/aishell/s0/image2reverb/{}_B/*.wav".format(XX) # (or "*.*")
-                # reverb_file = random.choice(glob.glob(pattern))
-                # waveform = apply_reverb(waveform.squeeze(0).numpy(), reverb_file)
-                # waveform /= numpy.max(numpy.abs(waveform))
-                # waveform = torch.from_numpy(waveform.astype("float32")).unsqueeze(0)
+            waveform, sample_rate = torchaudio.load(wav_path)
             example = dict(key=key,
                            txt=txt,
                            wav=waveform,
-                           sample_rate=sample_rate)
+                           sample_rate=sample_rate,
+                           txt_query=txt_query,
+                           wav_query=wav_query)
             yield example
         except Exception as ex:
             logging.warning('Failed to read {}'.format(wav_file))
@@ -234,11 +215,11 @@ def filter(data,
             continue
         if len(sample['label']) > token_max_length:
             continue
-        if num_frames != 0:
-            if len(sample['label']) / num_frames < min_output_input_ratio:
-                continue
-            if len(sample['label']) / num_frames > max_output_input_ratio:
-                continue
+        # if num_frames != 0:
+        #     if len(sample['label']) / num_frames < min_output_input_ratio:
+        #         continue
+        #     if len(sample['label']) / num_frames > max_output_input_ratio:
+        #         continue
         yield sample
 
 
@@ -322,7 +303,7 @@ def compute_fbank(data,
                           dither=dither,
                           energy_floor=0.0,
                           sample_frequency=sample_rate)
-        yield dict(key=sample['key'], label=sample['label'], feat=mat)
+        yield dict(key=sample['key'], label=sample['label'], feat=mat, query_label=sample['query_label'])
 
 
 def compute_mfcc(data,
@@ -383,7 +364,45 @@ def __tokenize_by_bpe_model(sp, txt):
                 tokens.append(p)
 
     return tokens
+   
+def tokenize_letters(data, symbol_table):
+    '''
+        eg : text: hello world
+                   h e l l o <space> w o r l d
+    '''
+    for sample in data:
+        assert 'txt' in sample
+        assert 'txt_query' in sample
+        txt = sample['txt']
+        txt_query = sample['txt_query']
+        label = []
+        query_label = []
+        
+        # txt
+        tokens = [ch for ch in txt]
+        for ch in tokens:
+            if ch in symbol_table:
+                label.append(symbol_table[ch])
+            elif ch == ' ':
+                label.append(symbol_table['<space>'])
+            elif '<unk>' in symbol_table:
+                label.append(symbol_table['<unk>'])
+        sample['tokens'] = tokens
+        sample['label'] = label
+        
+        # txt_query
+        query_tokens = [ch for ch in txt_query]
+        for ch in query_tokens:
+            if ch in symbol_table:
+                query_label.append(symbol_table[ch])
+            elif ch == ' ':
+                query_label.append(symbol_table['<space>'])
+            elif '<unk>' in symbol_table:
+                query_label.append(symbol_table['<unk>'])
+        sample['query_tokens'] = query_tokens
+        sample['query_label'] = query_label
 
+        yield sample
 
 def tokenize(data,
              symbol_table,
@@ -415,6 +434,8 @@ def tokenize(data,
     for sample in data:
         assert 'txt' in sample
         txt = sample['txt'].strip()
+        query = sample['txt_query'].strip()
+
         if non_lang_syms_pattern is not None:
             parts = non_lang_syms_pattern.split(txt.upper())
             parts = [w for w in parts if len(w.strip()) > 0]
@@ -443,8 +464,44 @@ def tokenize(data,
             elif '<unk>' in symbol_table:
                 label.append(symbol_table['<unk>'])
 
+        if non_lang_syms_pattern is not None:
+            parts = non_lang_syms_pattern.split(txt.upper())
+            parts = [w for w in parts if len(w.strip()) > 0]
+        else:
+            parts = [txt]
+
+        query_label = []
+        query_tokens = []
+        if non_lang_syms_pattern is not None:
+            query_parts = non_lang_syms_pattern.split(query.upper())
+            query_parts = [w for w in query_parts if len(w.strip()) > 0]
+        else:
+            query_parts = [query]
+
+        for part in query_parts:
+            if part in non_lang_syms:
+                query_tokens.append(part)
+            else:
+                if bpe_model is not None:
+                    query_tokens.extend(__tokenize_by_bpe_model(sp, part))
+                else:
+                    if split_with_space:
+                        part = part.split(" ")
+                    for ch in part:
+                        if ch == ' ':
+                            ch = "▁"
+                        query_tokens.append(ch)
+
+        for ch in query_tokens:
+            if ch in symbol_table:
+                query_label.append(symbol_table[ch])
+            elif '<unk>' in symbol_table:
+                query_label.append(symbol_table['<unk>'])
+
         sample['tokens'] = tokens
         sample['label'] = label
+        sample['query_tokens'] = query_tokens
+        sample['query_label'] = query_label
         yield sample
 
 
@@ -563,7 +620,7 @@ def shuffle(data, shuffle_size=10000):
         yield x
 
 
-def sort(data, sort_size=500):
+def sort(data, sort_size=500, reverse=False):
     """ Sort the data by feature length.
         Sort is used after shuffle and before batch, so we can group
         utts with similar lengths into a batch, and `sort_size` should
@@ -581,12 +638,12 @@ def sort(data, sort_size=500):
     for sample in data:
         buf.append(sample)
         if len(buf) >= sort_size:
-            buf.sort(key=lambda x: x['feat'].size(0))
+            buf.sort(key=lambda x: x['feat'].size(0), reverse=reverse)
             for x in buf:
                 yield x
             buf = []
     # The sample left over
-    buf.sort(key=lambda x: x['feat'].size(0))
+    buf.sort(key=lambda x: x['feat'].size(0), reverse=reverse)
     for x in buf:
         yield x
 
@@ -674,13 +731,21 @@ def padding(data):
         ]
         label_lengths = torch.tensor([x.size(0) for x in sorted_labels],
                                      dtype=torch.int32)
+        
+        sorted_query_labels = [
+            torch.tensor(sample[i]['query_label'], dtype=torch.int64) for i in order
+        ]
+        query_label_lengths = torch.tensor([x.size(0) for x in sorted_query_labels],
+                                     dtype=torch.int32)
 
         padded_feats = pad_sequence(sorted_feats,
                                     batch_first=True,
                                     padding_value=0)
         padding_labels = pad_sequence(sorted_labels,
-                                      batch_first=True,
-                                      padding_value=-1)
-
-        yield (sorted_keys, padded_feats, padding_labels, feats_lengths,
-               label_lengths)
+                                    batch_first=True,
+                                    padding_value=-1)
+        padding_query_labels = pad_sequence(sorted_query_labels,
+                                    batch_first=True,
+                                    padding_value=-1)
+        yield (sorted_keys, padded_feats, padding_labels, padding_query_labels, feats_lengths,
+               label_lengths, query_label_lengths)

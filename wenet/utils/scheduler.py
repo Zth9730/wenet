@@ -57,7 +57,6 @@ class WarmupLR(_LRScheduler):
 
     def get_lr(self):
         step_num = self.last_epoch + 1
-        print(step_num, self.base_lrs)
 
         if self.warmup_steps == 0:
             return [
