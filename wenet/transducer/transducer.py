@@ -73,7 +73,7 @@ class Transducer(ASRModel):
             self.simple_am_proj = torch.nn.Linear(
                 self.encoder.output_size(), vocab_size)
             self.simple_lm_proj = torch.nn.Linear(
-                self.predictor.embed_size, vocab_size)
+                self.predictor.output_size(), vocab_size)
 
         # Note(Mddct): decoder also means predictor in transducer,
         # but here decoder is attention decoder
@@ -85,7 +85,11 @@ class Transducer(ASRModel):
                 smoothing=lsm_weight,
                 normalize_length=length_normalized_loss,
             )
+            
+        self.encoder.global_cmvn = None
 
+        # self.input_ln = torch.nn.LayerNorm(
+        #         80, eps=1e-5, elementwise_affine=False)
     def forward(
         self,
         speech: torch.Tensor,
@@ -109,6 +113,8 @@ class Transducer(ASRModel):
                                          text.shape, text_lengths.shape)
 
         # Encoder
+        # speech = self.input_ln(speech)
+        assert self.encoder.global_cmvn == None
         encoder_out, encoder_mask = self.encoder(speech, speech_lengths)
         encoder_out_lens = encoder_mask.squeeze(1).sum(1)
 
@@ -116,6 +122,7 @@ class Transducer(ASRModel):
         loss_rnnt = compute_loss(
             self,
             encoder_out,
+            encoder_out_lens,
             encoder_mask,
             text,
             text_lengths,
@@ -471,6 +478,7 @@ class Transducer(ASRModel):
 
 def compute_loss(model: Transducer,
                  encoder_out: torch.Tensor,
+                 encoder_out_lens: torch.Tensor,
                  encoder_mask: torch.Tensor,
                  text: torch.Tensor,
                  text_lengths: torch.Tensor,

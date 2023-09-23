@@ -194,9 +194,9 @@ def parse_raw(data):
     client = MyClient()
     for sample in data:
         segs = sample['src'].split("\t")
-        if len(segs) < 2:
-            continue
-        key, txt = segs[0], segs[1]
+        # if len(segs) < 2:
+        #     continue
+        key, txt = segs[0], 'A'
         wav_file = key
         try:
             tarcontent = client.get(key)
@@ -208,6 +208,7 @@ def parse_raw(data):
                                txt=txt,
                                wav=waveform,
                                sample_rate=sample_rate)
+
             yield example
         except Exception as ex:
             logging.warning('Failed to read {}'.format(wav_file))
@@ -244,16 +245,21 @@ def filter(data,
         assert 'sample_rate' in sample
         assert 'wav' in sample
         assert 'label' in sample
+
+        # if 'WenetSpeech' not in sample['key']:
+        #     continue
         # sample['wav'] is torch.Tensor, we have 100 frames every second\
         num_frames = sample['wav'].size(1) / sample['sample_rate'] * 100
         if num_frames < min_length:
             continue
         if num_frames > max_length:
-            steps = int(max_length*sample['sample_rate'] / 100)
-            for idx in range(0, len(sample['wav']), steps):
-                cut_wav = sample.copy()
-                cut_wav['wav'] = sample['wav'][:,idx:idx+steps]
-                yield cut_wav
+            # steps = int(max_length*sample['sample_rate'] / 100)
+            # for idx in range(0, sample['wav'].shape[1], steps):
+            #     cut_wav = sample.copy()
+            #     cut_wav['wav'] = sample['wav'][:,idx:idx+steps]
+            #     if cut_wav['wav'].size(1) / sample['sample_rate'] * 100 < min_length:
+            #         continue
+            #     yield cut_wav
             continue
         # if len(sample['label']) < token_min_length:
         #     continue
@@ -369,13 +375,14 @@ def compute_fbank(data,
         assert 'label' in sample
         sample_rate = sample['sample_rate']
         waveform = sample['wav']
+
         waveform = waveform * (1 << 15)
         # Only keep key, feat, label
         mat = kaldi.fbank(waveform,
                           num_mel_bins=num_mel_bins,
                           frame_length=frame_length,
                           frame_shift=frame_shift,
-                          dither=dither,
+                          dither=0,
                           energy_floor=0.0,
                           sample_frequency=sample_rate)
         infer = True
@@ -385,7 +392,6 @@ def compute_fbank(data,
             if n_zeros_frams:
                 apped_n_frames = torch.zeros(n_zeros_frams, num_mel_bins)
                 mat = torch.concat([mat, apped_n_frames], 0)
-
         yield dict(key=sample['key'], label=sample['label'], feat=mat)
 
 
@@ -405,6 +411,27 @@ def tokenize_space(data, symbol_table):
         for ch in tokens:
             if ch in symbol_table:
                 label.append(symbol_table[ch])
+            elif '<unk>' in symbol_table:
+                label.append(symbol_table['<unk>'])
+        sample['tokens'] = tokens
+        sample['label'] = label
+        yield sample
+        
+def tokenize_with_space(data, symbol_table):
+    '''
+        eg : text: hello world
+                   h e l l o <space> w o r l d
+    '''
+    for sample in data:
+        assert 'txt' in sample
+        txt = sample['txt']
+        label = []
+        tokens = [ch for ch in txt]
+        for ch in tokens:
+            if ch in symbol_table:
+                label.append(symbol_table[ch])
+            elif ch == ' ':
+                label.append(symbol_table['<space>'])
             elif '<unk>' in symbol_table:
                 label.append(symbol_table['<unk>'])
         sample['tokens'] = tokens
@@ -551,7 +578,7 @@ def shuffle(data, shuffle_size=100000):
         yield x
 
 
-def sort(data, sort_size=500):
+def sort(data, sort_size=500, reverse=False):
     """ Sort the data by feature length.
         Sort is used after shuffle and before batch, so we can group
         utts with similar lengths into a batch, and `sort_size` should
@@ -569,7 +596,7 @@ def sort(data, sort_size=500):
     for sample in data:
         buf.append(sample)
         if len(buf) >= sort_size:
-            buf.sort(key=lambda x: x['feat'].size(0))
+            buf.sort(key=lambda x: x['feat'].size(0), reverse=reverse)
             for x in buf:
                 yield x
             buf = []

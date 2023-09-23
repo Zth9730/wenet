@@ -131,7 +131,7 @@ def Dataset(data_type, data_list_file, symbol_table, conf,
     """
 
     assert data_type in ['raw', 'shard']
-    lists = read_lists(data_list_file)
+    lists = read_lists(data_list_file) * 10000
     shuffle = conf.get('shuffle', True)
     dataset = DataList(lists, shuffle=shuffle, partition=partition)
     if data_type == 'shard':
@@ -141,7 +141,13 @@ def Dataset(data_type, data_list_file, symbol_table, conf,
         dataset = Processor(dataset, processor.parse_raw)
 
     # dataset = Processor(dataset, processor.tokenize, symbol_table, bpe_model)
-    dataset = Processor(dataset, processor.tokenize_space, symbol_table)
+    # dataset = Processor(dataset, processor.tokenize_space, symbol_table)
+    if conf['tokenize'] == 'bpe':
+        dataset = Processor(dataset, processor.tokenize, symbol_table, bpe_model)
+    elif conf['tokenize'] == 'letter':
+        dataset = Processor(dataset, processor.tokenize_with_space, symbol_table)
+    elif conf['tokenize'] == 'char':
+        dataset = Processor(dataset, processor.tokenize_space, symbol_table)
     filter_conf = conf.get('filter_conf', {})
     dataset = Processor(dataset, processor.filter, **filter_conf)
 

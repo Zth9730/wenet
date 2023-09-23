@@ -56,7 +56,8 @@ class ASRModel(torch.nn.Module):
         lsm_weight: float = 0.0,
         length_normalized_loss: bool = False,
         lfmmi_dir: str = '',
-        input_ln = False
+        input_ln = False,
+        use_cmvn = False
     ):
         assert 0.0 <= ctc_weight <= 1.0, ctc_weight
 
@@ -87,7 +88,11 @@ class ASRModel(torch.nn.Module):
             self.input_ln = torch.nn.LayerNorm(
                 80, eps=1e-5, elementwise_affine=False
             )
-
+        self.cmvn = use_cmvn
+        if use_cmvn:
+            assert self.encoder.global_cmvn is not None
+        else:
+            self.encoder.global_cmvn = None
     def forward(
         self,
         speech: torch.Tensor,
@@ -103,7 +108,6 @@ class ASRModel(torch.nn.Module):
             text: (Batch, Length)
             text_lengths: (Batch,)
         """
-
         assert text_lengths.dim() == 1, text_lengths.shape
         # Check that batch_size is unified
         assert (speech.shape[0] == speech_lengths.shape[0] == text.shape[0] ==

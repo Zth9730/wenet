@@ -33,7 +33,7 @@ from deepspeed.utils.zero_to_fp32 import convert_zero_checkpoint_to_fp32_state_d
 from tensorboardX import SummaryWriter
 from torch.utils.data import DataLoader
 
-from wenet.dataset.dataset import Dataset
+from wenet.dataset.dataset_s3 import Dataset
 from wenet.utils.checkpoint import (load_checkpoint, save_checkpoint,
                                     load_trained_modules)
 from wenet.utils.executor import Executor
@@ -147,7 +147,7 @@ def get_args():
 
 def main():
     args = get_args()
-    logging.basicConfig(level=logging.DEBUG,
+    logging.basicConfig(level=logging.INFO,
                         format='%(asctime)s %(levelname)s %(message)s')
     # NOTE(xcsong): deepspeed set CUDA_VISIBLE_DEVICES internally
     os.environ['CUDA_VISIBLE_DEVICES'] = str(args.gpu) if not args.deepspeed \
@@ -192,7 +192,19 @@ def main():
                                    world_size=world_size)
 
     symbol_table = read_symbol_table(args.symbol_table)
+    vocab_size = len(symbol_table)
 
+    # Save configs to model_dir/train.yaml for inference and export
+    if 'fbank_conf' in configs['dataset_conf']:
+        input_dim = configs['dataset_conf']['fbank_conf']['num_mel_bins']
+    else:
+        input_dim = configs['dataset_conf']['mfcc_conf']['num_mel_bins']
+    configs['vocab_size'] = vocab_size
+    configs['blank_id']  = 0
+    configs['input_dim'] = input_dim
+    configs['output_dim'] = vocab_size
+    configs['cmvn_file'] = args.cmvn
+    configs['is_json_cmvn'] = True
     train_conf = configs['dataset_conf']
     cv_conf = copy.deepcopy(train_conf)
     cv_conf['speed_perturb'] = False
@@ -231,26 +243,23 @@ def main():
         assert ds_configs["train_micro_batch_size_per_gpu"] == 1
         configs['accum_grad'] = ds_configs["gradient_accumulation_steps"]
     train_dataset = Dataset(args.data_type, args.train_data, symbol_table,
-                            train_conf, args.bpe_model, non_lang_syms, True)
+                        train_conf, True)
     cv_dataset = Dataset(args.data_type,
                          args.cv_data,
                          symbol_table,
                          cv_conf,
-                         args.bpe_model,
-                         non_lang_syms,
                          partition=False)
-
     train_data_loader = DataLoader(train_dataset,
                                    batch_size=None,
                                    pin_memory=args.pin_memory,
                                    num_workers=args.num_workers,
+                                   persistent_workers=True,
                                    prefetch_factor=args.prefetch)
     cv_data_loader = DataLoader(cv_dataset,
                                 batch_size=None,
                                 pin_memory=args.pin_memory,
                                 num_workers=args.num_workers,
                                 prefetch_factor=args.prefetch)
-
     if 'fbank_conf' in configs['dataset_conf']:
         input_dim = configs['dataset_conf']['fbank_conf']['num_mel_bins']
     else:
@@ -279,9 +288,9 @@ def main():
     # !!!IMPORTANT!!!
     # Try to export the model by script, if fails, we should refine
     # the code to satisfy the script export requirements
-    if local_rank == 0:
-        script_model = torch.jit.script(model)
-        script_model.save(os.path.join(args.model_dir, 'init.zip'))
+    # if local_rank == 0:
+    #     script_model = torch.jit.script(model)
+    #     script_model.save(os.path.join(args.model_dir, 'init.zip'))
     executor = Executor()
     # If specify checkpoint, load some info from checkpoint
     if args.checkpoint is not None:
@@ -333,13 +342,33 @@ def main():
         use_cuda = args.gpu >= 0 and torch.cuda.is_available()
         device = torch.device('cuda' if use_cuda else 'cpu')
         model = model.to(device)
-
-    if configs['optim'] == 'adam':
-        optimizer = optim.Adam(model.parameters(), **configs['optim_conf'])
-    elif configs['optim'] == 'adamw':
-        optimizer = optim.AdamW(model.parameters(), **configs['optim_conf'])
+    
+    if args.fintune:
+        pretrain_params = list(map(id, model.encoder.parameters()))
+        model_params = filter(lambda p: id(p) not in pretrain_params, model.parameters()) 
+        if configs['optim'] == 'adam':
+            optimizer = optim.Adam([{'params': model_params},
+                                    {'params': model.encoder.parameters(), 'lr': configs['optim_conf']['pretrained_lr']}], 
+                                    **configs['optim_conf'])
+        elif configs['optim'] == 'adamw':
+            optimizer = optim.AdamW([{'params': model_params},
+                                    {'params': model.encoder.parameters(), 'lr': configs['optim_conf']['pretrained_lr']}], 
+                                    **configs['optim_conf'])
+        elif configs['optim'] == 'sgd':
+            optimizer = optim.SGD([{'params': model_params},
+                                    {'params': model.encoder.parameters(), 'lr': configs['optim_conf']['pretrained_lr']}], 
+                                    **configs['optim_conf'])
+        else:
+            raise ValueError("unknown optimizer: " + configs['optim'])
     else:
-        raise ValueError("unknown optimizer: " + configs['optim'])
+        if configs['optim'] == 'adam':
+            optimizer = optim.Adam(model.parameters(), **configs['optim_conf'])
+        elif configs['optim'] == 'adamw':
+            optimizer = optim.AdamW(model.parameters(), **configs['optim_conf'])
+        elif configs['optim'] == 'sgd':
+            optimizer = optim.SGD(model.parameters(), **configs['optim_conf'])
+        else:
+            raise ValueError("unknown optimizer: " + configs['optim'])
     scheduler_type = None
     if configs['scheduler'] == 'warmuplr':
         scheduler_type = WarmupLR
@@ -349,6 +378,10 @@ def main():
         scheduler = NoamHoldAnnealing(optimizer, **configs['scheduler_conf'])
     else:
         raise ValueError("unknown scheduler: " + configs['scheduler'])
+
+    # if freeze
+    if args.fintune:
+        if configs['ssl_conf']
 
     # NOTE(xcsong): Custom optimizer might yield poor performance when
     #   zero-offload is enabled, if you do want to offload optimizer to CPU,

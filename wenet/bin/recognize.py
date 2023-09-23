@@ -163,7 +163,7 @@ def get_args():
                         default=[],
                         help="override yaml config")
     parser.add_argument('--connect_symbol',
-                        default='',
+                        default=' ',
                         type=str,
                         help='used to connect the output characters')
     parser.add_argument('--cmvn', default=None, help='global cmvn file')
@@ -196,7 +196,7 @@ def get_args():
 def main():
     args = get_args()
     logger = Log('decode_log', args.result_file + '_log').getlog()
-    os.environ['CUDA_VISIBLE_DEVICES'] = str(args.gpu)
+    # os.environ['CUDA_VISIBLE_DEVICES'] = str(args.gpu)
 
     if args.mode in ['ctc_prefix_beam_search', 'attention_rescoring'
                      ] and args.batch_size > 1:
@@ -408,8 +408,8 @@ def main():
                     if w == eos:
                         break
                     content.append(char_dict[w])
-                logger.info('{} {}'.format(key.split('/')[-1], args.connect_symbol.join(content)))
-                fout.write('{} {}\n'.format(key.split('/')[-1], args.connect_symbol.join(content)))
+                logger.info('{} {}'.format(key.split('/')[-1], args.connect_symbol.join(content).replace('<space>', ' ')))
+                fout.write('{} {}\n'.format(key.split('/')[-1], args.connect_symbol.join(content).replace('<space>', ' ')))
                 fout_real.write('{} {}\n'.format(key.split('/')[-1], ' '.join(content)))
 
 

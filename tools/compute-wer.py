@@ -337,6 +337,8 @@ if __name__ == '__main__':
           padding_symbol= ' '
         elif b == 'underline':
           padding_symbol= '_'
+        elif b == 'mine':
+          padding_symbol='<space>'
         continue
      if True or sys.argv[1].startswith('-'):
         #ignore invalid switch

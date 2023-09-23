@@ -20,13 +20,13 @@ from typing import Tuple
 import torch
 
 from wenet.transformer.attention import MultiHeadedAttention
-from wenet.transformer.attention import RelPositionMultiHeadedAttention
+from wenet.transformer.attention import RelPositionMultiHeadedAttention, RealRelPositionMultiHeadedAttention
 from wenet.transformer.convolution import ConvolutionModule
 from wenet.transformer.embedding import PositionalEncoding
 from wenet.transformer.embedding import RelPositionalEncoding
 from wenet.transformer.embedding import NoPositionalEncoding
 from wenet.transformer.encoder_layer import TransformerEncoderLayer
-from wenet.transformer.encoder_layer import ConformerEncoderLayer
+from wenet.transformer.encoder_layer import ConformerEncoderLayer, RealConformerEncoderLayer
 from wenet.transformer.positionwise_feed_forward import PositionwiseFeedForward
 from wenet.transformer.subsampling import Conv2dSubsampling4
 from wenet.transformer.subsampling import Conv2dSubsampling6
@@ -54,7 +54,10 @@ class BaseEncoder(torch.nn.Module):
         static_chunk_size: int = 0,
         use_dynamic_chunk: bool = False,
         global_cmvn: torch.nn.Module = None,
-        use_dynamic_left_chunk: bool = False
+        use_dynamic_left_chunk: bool = False,
+        last_ln = True,
+        realformer = False,
+        adanorm=False
     ):
         """
         Args:
@@ -86,7 +89,8 @@ class BaseEncoder(torch.nn.Module):
         """
         super().__init__()
         self._output_size = output_size
-
+        self.last_ln = last_ln
+        self.real = realformer
         if pos_enc_layer_type == "abs_pos":
             pos_enc_class = PositionalEncoding
         elif pos_enc_layer_type == "rel_pos":
@@ -131,6 +135,7 @@ class BaseEncoder(torch.nn.Module):
         decoding_chunk_size: int = 0,
         num_decoding_left_chunks: int = -1,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
+
         """Embed positions in tensor.
 
         Args:
@@ -162,10 +167,17 @@ class BaseEncoder(torch.nn.Module):
                                               decoding_chunk_size,
                                               self.static_chunk_size,
                                               num_decoding_left_chunks)
-        for layer in self.encoders:
-            xs, chunk_masks, _, _ = layer(xs, chunk_masks, pos_emb, mask_pad)
-        if self.normalize_before:
-            xs = self.after_norm(xs)
+        if self.real:
+            p_attn = torch.zeros((0, 0, 0, 0))
+            for layer in self.encoders:
+                xs, chunk_masks, _, _, p_attn = layer(xs, chunk_masks, pos_emb, mask_pad, p_attn=p_attn)
+        else:
+            for layer in self.encoders:
+                xs, chunk_masks, _, _ = layer(xs, chunk_masks, pos_emb, mask_pad)
+
+        if self.last_ln:
+            if self.normalize_before:
+                xs = self.after_norm(xs)
         # Here we assume the mask is not changed in encoder layers, so just
         # return the masks before encoder layers, and the masks will be used
         # for cross attention with decoder later
@@ -387,6 +399,9 @@ class ConformerEncoder(BaseEncoder):
         cnn_module_kernel: int = 15,
         causal: bool = False,
         cnn_module_norm: str = "batch_norm",
+        last_ln = True,
+        realformer = False,
+        adanorm=False,
     ):
         """Construct ConformerEncoder
 
@@ -409,12 +424,14 @@ class ConformerEncoder(BaseEncoder):
                          positional_dropout_rate, attention_dropout_rate,
                          input_layer, pos_enc_layer_type, normalize_before,
                          static_chunk_size, use_dynamic_chunk,
-                         global_cmvn, use_dynamic_left_chunk)
+                         global_cmvn, use_dynamic_left_chunk, last_ln, realformer,adanorm)
         activation = get_activation(activation_type)
 
         # self-attention module definition
         if pos_enc_layer_type != "rel_pos":
             encoder_selfattn_layer = MultiHeadedAttention
+        elif realformer:
+            encoder_selfattn_layer = RealRelPositionMultiHeadedAttention
         else:
             encoder_selfattn_layer = RelPositionMultiHeadedAttention
         encoder_selfattn_layer_args = (
@@ -434,17 +451,32 @@ class ConformerEncoder(BaseEncoder):
         convolution_layer = ConvolutionModule
         convolution_layer_args = (output_size, cnn_module_kernel, activation,
                                   cnn_module_norm, causal)
-
-        self.encoders = torch.nn.ModuleList([
-            ConformerEncoderLayer(
-                output_size,
-                encoder_selfattn_layer(*encoder_selfattn_layer_args),
-                positionwise_layer(*positionwise_layer_args),
-                positionwise_layer(
-                    *positionwise_layer_args) if macaron_style else None,
-                convolution_layer(
-                    *convolution_layer_args) if use_cnn_module else None,
-                dropout_rate,
-                normalize_before,
-            ) for _ in range(num_blocks)
-        ])
+        if realformer:
+            self.encoders = torch.nn.ModuleList([
+                RealConformerEncoderLayer(
+                    output_size,
+                    encoder_selfattn_layer(*encoder_selfattn_layer_args),
+                    positionwise_layer(*positionwise_layer_args),
+                    positionwise_layer(
+                        *positionwise_layer_args) if macaron_style else None,
+                    convolution_layer(
+                        *convolution_layer_args) if use_cnn_module else None,
+                    dropout_rate,
+                    normalize_before,
+                ) for _ in range(num_blocks)
+            ])
+        else:
+            self.encoders = torch.nn.ModuleList([
+                ConformerEncoderLayer(
+                    output_size,
+                    encoder_selfattn_layer(*encoder_selfattn_layer_args),
+                    positionwise_layer(*positionwise_layer_args),
+                    positionwise_layer(
+                        *positionwise_layer_args) if macaron_style else None,
+                    convolution_layer(
+                        *convolution_layer_args) if use_cnn_module else None,
+                    dropout_rate,
+                    normalize_before,
+                    adanorm,
+                ) for _ in range(num_blocks)
+            ])

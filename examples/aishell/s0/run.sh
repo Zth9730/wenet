@@ -24,7 +24,7 @@ num_nodes=1
 node_rank=0
 # The aishell dataset location, please change this to your own path
 # make sure of using absolute path. DO-NOT-USE relatvie path!
-data=/export/data/asr-data/OpenSLR/33/
+data=/mnt/lustre/zhoudinghao/data/
 data_url=www.openslr.org/resources/33
 
 nj=16
@@ -171,7 +171,7 @@ if [ ${stage} -le 4 ] && [ ${stop_stage} -ge 4 ]; then
       # Rank of each gpu/process used for knowing whether it is
       # the master of a worker.
       rank=`expr $node_rank \* $num_gpus + $i`
-      python wenet/bin/train.py --gpu $gpu_id \
+      python wenet/bin/train_spring.py --gpu $gpu_id \
         --config $train_config \
         --data_type $data_type \
         --symbol_table $dict \

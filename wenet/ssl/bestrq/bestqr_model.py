@@ -68,9 +68,15 @@ class BestRQModel(torch.nn.Module):
         min_masks: int = 2,
         norm_epsilon: float = 1e-5,
         features_regularization_weight: float = 0.01,
+        input_ln = False,
+        use_cmvn = False,
+        dynamic_mask_length = False,
+        project_ln = True,
     ) -> None:
         super().__init__()
         assert mask_prob > 0.0
+        
+        self.project_ln = project_ln
         self.mask_prob = mask_prob
         self.mask_length = mask_length
         self.min_masks = min_masks
@@ -79,20 +85,23 @@ class BestRQModel(torch.nn.Module):
         self.num_embeddings = num_embeddings
         self.features_regularization_weight = features_regularization_weight
 
+        self.dynamic_mask_length = dynamic_mask_length
         # encoder
         self.encoder = encoder
 
-        # self.input_ln = input_ln
-        # if input_ln:
-        #     self.input_ln = torch.nn.LayerNorm(
-        #         num_mel_bins, eps=norm_epsilon, elementwise_affine=False
-        #     )
-        #CMVN
-        assert self.encoder.global_cmvn is not None
-        self.register_buffer('signal_mean', self.encoder.global_cmvn.mean)
-        self.register_buffer('signal_istd', self.encoder.global_cmvn.istd)
-        self.signal_norm_var = self.encoder.global_cmvn.norm_var
-        # # NOTE(Mddct): disable encoder's global_cmvn
+        self.input_ln = input_ln
+        self.use_cmvn = use_cmvn
+        if input_ln:
+            self.input_ln = torch.nn.LayerNorm(
+                num_mel_bins, eps=norm_epsilon, elementwise_affine=False
+            )
+        elif use_cmvn:
+            #CMVN
+            assert self.encoder.global_cmvn is not None
+            self.register_buffer('signal_mean', self.encoder.global_cmvn.mean)
+            self.register_buffer('signal_istd', self.encoder.global_cmvn.istd)
+            self.signal_norm_var = self.encoder.global_cmvn.norm_var
+        #     # # NOTE(Mddct): disable encoder's global_cmvn
         self.encoder.global_cmvn = None
         # n softmax
         self.encoder_top_n_out = torch.nn.parameter.Parameter(
@@ -106,7 +115,7 @@ class BestRQModel(torch.nn.Module):
         # mask embedding
         mask_embedding_dim = num_mel_bins
         self.mask_emb = torch.nn.parameter.Parameter(
-            torch.empty(mask_embedding_dim), requires_grad=True)
+            torch.empty(mask_embedding_dim), requires_grad=False)
         torch.nn.init.trunc_normal_(self.mask_emb, std=0.1)
 
         # stack input: eg: fbank
@@ -161,6 +170,7 @@ class BestRQModel(torch.nn.Module):
         for _, layer in enumerate(encoders):
             self_attn = layer.self_attn
             _reset_parameter(self_attn.linear_q)
+            _reset_parameter(self_attn.linear_q)
             _reset_parameter(self_attn.linear_k)
             _reset_parameter(self_attn.linear_v)
             _reset_parameter(self_attn.linear_out)
@@ -168,37 +178,45 @@ class BestRQModel(torch.nn.Module):
                 _reset_parameter(self_attn.pos_bias_u)
                 _reset_parameter(self_attn.pos_bias_v)
             if isinstance(layer, ConformerEncoderLayer):
-                conv1, conv2 = (layer.conv_module.pointwise_conv1,
-                                layer.conv_module.depthwise_conv)
+                conv1, conv2, conv3 = (layer.conv_module.pointwise_conv1,
+                                layer.conv_module.depthwise_conv,
+                                layer.conv_module.pointwise_conv2,)
                 _reset_parameter(conv1)
                 _reset_parameter(conv2)
+                _reset_parameter(conv3)
+            
 
     def forward(
         self,
         xs: torch.Tensor,
         xs_lens: torch.Tensor,
     ):
-        # force global cmvn
-        xs = xs - self.signal_mean
-        if self.signal_norm_var:
-            xs = xs * self.signal_istd
+        # import pdb
+        # pdb.set_trace()
     
-        # if self.input_ln:
-        #     xs = self.input_ln(xs)    
-
+        if self.input_ln:
+            xs = self.input_ln(xs)
+        elif self.use_cmvn:
+        # force global cmvn
+            xs = xs - self.signal_mean
+            if self.signal_norm_var:
+                xs = xs * self.signal_istd
         input = xs
         features_pen: Optional[torch.Tensor] = None
         if self.features_regularization_weight != 0.0:
             features_pen = input.pow(2).mean()
 
         # 0 mask input
+        if self.dynamic_mask_length:
+            self.mask_length = int(xs.shape[1] / 100 * 1.25)
         xs, masked_masks = self._apply_mask_signal(xs, xs_lens)
 
         # 1 get subsampling mask   #####TODO Mask and stack if correct
         subsampling_masks = masked_masks.unfold(1,
                                                 size=self.stack_frames,
                                                 step=self.stride)
-        code_ids_mask, _ = torch.min(subsampling_masks, 2)
+        code_ids_mask, _ = torch.max(subsampling_masks, 2)
+        # code_ids_mask, _ = torch.min(subsampling_masks, -1)
 
         # 2.0 stack fbank
         unmasked_xs = self._stack_features(input)
@@ -225,6 +243,8 @@ class BestRQModel(torch.nn.Module):
             loss = loss + self.features_regularization_weight * features_pen
 
         # 6 other info: num codes used in batch, unique num codes used in batch
+        # import pdb
+        # pdb.set_trace()
         num_codes = masks.sum() * self.num_codebooks
         uniq_num_codes = torch.tensor(
             torch.unique(target_ids * masks.unsqueeze(2)).numel()).detach()
@@ -237,7 +257,7 @@ class BestRQModel(torch.nn.Module):
             "loss": loss,
             "num_codes": num_codes,
             "uniq_num_codes": uniq_num_codes
-        }
+        }, target_ids
 
     def _apply_mask_signal(
             self, input: torch.Tensor,
@@ -251,12 +271,12 @@ class BestRQModel(torch.nn.Module):
                                         device=input.device)
 
         masks_expand = masks.unsqueeze(-1)  # [B, T, 1]
-        mask_emb = self.mask_emb.to(input.device).view(1, 1, -1)
+        # mask_emb = self.mask_emb.to(input.device).view(1, 1, -1)
+        mask_emb = torch.normal(mean=0, std=0.1, size=(1,input.size(1), input.size(2))).to(input.device)
         xs = torch.where(masks_expand, mask_emb, input)
         return xs, masks
 
     def _stack_features(self, input: torch.Tensor) -> torch.Tensor:
-
         stack_input = input.unfold(1, size=self.stack_frames, step=self.stride)
         stack_input = stack_input.transpose(-1, -2)
         b, n, f, d = stack_input.size()
@@ -271,14 +291,14 @@ class BestRQModel(torch.nn.Module):
 
         per_example_n_loss = -log_probs.gather(3, target.unsqueeze(3)).squeeze(
             3)  # [B, T', num_codebooks]
-
         numerator = torch.sum(per_example_n_loss * mask.unsqueeze(2))
         denominator = torch.sum(mask) + 1e-5
         loss = numerator / (denominator * self.num_codebooks)
         return loss
 
     def _nearest_embedding_idx(self, xs: torch.Tensor) -> torch.Tensor:
-        xs = self.norm(xs)
+        if self.project_ln:
+            xs = self.norm(xs)
         xs = torch.matmul(xs, self.projection.to(xs.device))
 
         B, T, C = xs.size()

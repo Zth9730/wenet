@@ -19,7 +19,9 @@ from contextlib import nullcontext
 # from contextlib import suppress as nullcontext
 import torch
 from torch.nn.utils import clip_grad_norm_
+from torch.distributed.algorithms.join import Join
 
+import torch.distributed as dist
 
 class Executor:
 
@@ -27,7 +29,7 @@ class Executor:
         self.step = 0
 
     def train(self, model, optimizer, scheduler, data_loader, device, writer,
-              args, scaler, logger):
+              args, scaler, logger=None):
         ''' Train one epoch
         '''
         model.train()
@@ -61,6 +63,7 @@ class Executor:
         with model_context():
             for batch_idx, batch in enumerate(data_loader):
                 key, feats, target, feats_lengths, target_lengths = batch
+                
                 feats = feats.to(device)
                 target = target.to(device)
                 feats_lengths = feats_lengths.to(device)
@@ -136,6 +139,7 @@ class Executor:
                         grad_norm = clip_grad_norm_(model.parameters(), clip)
                         if torch.isfinite(grad_norm):
                             optimizer.step()
+
                     optimizer.zero_grad()
                     scheduler.step()
                     self.step += 1
@@ -148,8 +152,11 @@ class Executor:
                         if name != 'loss' and value is not None:
                             log_str += '{} {:.6f} '.format(name, value.item())
                     log_str += 'lr {:.8f} rank {}'.format(lr, rank)
-                    logging.info(log_str)
                     logger.info(log_str)
+        t_step = torch.tensor(self.step).to(model.device)
+        dist.all_reduce(t_step, op=dist.ReduceOp.MAX)
+        self.step = t_step.item()
+        scheduler.set_step(self.step)
 
     def cv(self, model, data_loader, device, args, logger):
         ''' Cross validation on
@@ -201,6 +208,6 @@ class Executor:
                     log_str += 'history loss {:.6f}'.format(total_loss /
                                                             num_seen_utts)
                     log_str += ' rank {}'.format(rank)
-                    logging.info(log_str)
                     logger.info(log_str)
-        return total_loss, num_seen_utts
+                loss_dict['total_loss'] = total_loss
+        return loss_dict, num_seen_utts

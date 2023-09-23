@@ -1,6 +1,7 @@
 import torch
 import numpy as np
 
+
 def _sampler(pdf: torch.Tensor, num_samples: int,
              device=torch.device('cpu')) -> torch.Tensor:
     size = pdf.size()
@@ -10,13 +11,11 @@ def _sampler(pdf: torch.Tensor, num_samples: int,
 
 
 def compute_mask_indices(
-        size: torch.Size,
-        mask_prob: float,
-        mask_length: int,
-        min_masks: int = 0,
-        device=torch.device('cpu'),
-) -> torch.Tensor:
-
+    size: torch.Size,
+    mask_prob: float,
+    mask_length: int,
+    min_masks: int = 0,
+    device=torch.device('cpu')) -> torch.Tensor:
     assert len(size) == 2
     batch_size, seq_length = size
 
@@ -34,8 +33,7 @@ def compute_mask_indices(
     mask_idxs = _sampler(pdf, num_masked_spans, device=device)
 
     mask_idxs = mask_idxs.unsqueeze(-1).repeat(1, 1, mask_length).view(
-        batch_size,
-        num_masked_spans * mask_length)  # [B,num_masked_spans*mask_length]
+        batch_size, num_masked_spans * mask_length)  # [B,1]
 
     offset = torch.arange(mask_length, device=device).view(1, 1, -1).repeat(
         1, num_masked_spans, 1)  # [1,num_masked_spans,mask_length]
@@ -53,25 +51,27 @@ def compute_mask_indices(
                                  device=mask_idxs.device)
     return torch.scatter(full_mask, dim=1, index=mask_idxs, src=ones)
 
-
 def compute_mask_indices_v2(
-        shape,
-        padding_mask,
-        mask_prob: float,
-        mask_length: int,
-        mask_type: str = 'static',
-        mask_other: float = 0.0,
-        min_masks: int = 2,
-        no_overlap: bool = False,
-        min_space: int = 1,
-        device=torch.device('cpu'),
+    shape,
+    padding_mask,
+    mask_prob: float,
+    mask_length: int,
+    mask_type: str = 'static',
+    mask_other: float = 0.0,
+    min_masks: int = 2,
+    no_overlap: bool = False,
+    min_space: int = 1,
+    device=torch.device('cpu'),
 ):
     bsz, all_sz = shape
     mask = np.full((bsz, all_sz), False)
+    # mask_type = mask_type.decode()
     padding_mask = padding_mask.cpu().numpy()
     all_num_mask = int(
         # add a random number for probabilistic rounding
-        mask_prob * all_sz / float(mask_length) + np.random.rand())
+        mask_prob * all_sz / float(mask_length)
+        + np.random.rand()
+    )
 
     all_num_mask = max(min_masks, all_num_mask)
 
@@ -81,7 +81,9 @@ def compute_mask_indices_v2(
             sz = all_sz - padding_mask[i].sum()
             num_mask = int(
                 # add a random number for probabilistic rounding
-                mask_prob * sz / float(mask_length) + np.random.rand())
+                mask_prob * sz / float(mask_length)
+                + np.random.rand()
+            )
             num_mask = max(min_masks, num_mask)
         else:
             sz = all_sz
@@ -90,9 +92,9 @@ def compute_mask_indices_v2(
         if mask_type == 'static':
             lengths = np.full(num_mask, mask_length)
         elif mask_type == 'uniform':
-            lengths = np.random.randint(mask_other,
-                                        mask_length * 2 + 1,
-                                        size=num_mask)
+            lengths = np.random.randint(
+                mask_other, mask_length * 2 + 1, size=num_mask
+            )
         elif mask_type == 'normal':
             lengths = np.random.normal(mask_length, mask_other, size=num_mask)
             lengths = [max(1, int(round(x))) for x in lengths]
@@ -108,7 +110,7 @@ def compute_mask_indices_v2(
         if no_overlap:
             mask_idc = []
 
-            def arrange(s, e, length, keep_length, mask_idc):
+            def arrange(s, e, length, keep_length):
                 span_start = np.random.randint(s, e - length)
                 mask_idc.extend(span_start + i for i in range(length))
 
@@ -123,8 +125,10 @@ def compute_mask_indices_v2(
             min_length = min(lengths)
             for length in sorted(lengths, reverse=True):
                 lens = np.fromiter(
-                    (e - s if e - s >= length + min_space else 0
-                     for s, e in parts),
+                    (
+                        e - s if e - s >= length + min_space else 0
+                        for s, e in parts
+                    ),
                     np.int,
                 )
                 l_sum = np.sum(lens)
@@ -133,7 +137,7 @@ def compute_mask_indices_v2(
                 probs = lens / np.sum(lens)
                 c = np.random.choice(len(parts), p=probs)
                 s, e = parts.pop(c)
-                parts.extend(arrange(s, e, length, min_length, mask_idc))
+                parts.extend(arrange(s, e, length, min_length))
             mask_idc = np.asarray(mask_idc)
         else:
             min_len = min(lengths)
@@ -142,10 +146,13 @@ def compute_mask_indices_v2(
 
             mask_idc = np.random.choice(sz - min_len, num_mask, replace=False)
 
-            mask_idc = np.asarray([
-                mask_idc[j] + offset for j in range(len(mask_idc))
-                for offset in range(lengths[j])
-            ])
+            mask_idc = np.asarray(
+                [
+                    mask_idc[j] + offset
+                    for j in range(len(mask_idc))
+                    for offset in range(lengths[j])
+                ]
+            )
 
         mask_idcs.append(np.unique(mask_idc[mask_idc < sz]))
 
@@ -155,5 +162,6 @@ def compute_mask_indices_v2(
             mask_idc = np.random.choice(mask_idc, min_len, replace=False)
         mask[i, mask_idc] = True
 
+    # mask = torch.tensor(mask, device=device).detach()
     mask = torch.from_numpy(mask).to(device)
     return mask

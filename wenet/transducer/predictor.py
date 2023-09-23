@@ -69,6 +69,7 @@ class RNNPredictor(PredictorBase):
         super().__init__()
         self.n_layers = num_layers
         self.hidden_size = hidden_size
+        self._output_size = output_size
         # disable rnn base out projection
         self.embed = nn.Embedding(voca_size, embed_size)
         self.dropout = nn.Dropout(embed_dropout)
@@ -82,6 +83,9 @@ class RNNPredictor(PredictorBase):
                                               batch_first=True,
                                               dropout=dropout)
         self.projection = nn.Linear(hidden_size, output_size)
+
+    def output_size(self):
+        return self._output_size
 
     def forward(
         self,
@@ -273,6 +277,9 @@ class EmbeddingPredictor(PredictorBase):
         """
         history = torch.cat([h[0] for h in cache], dim=0)
         return [history]
+    
+    def output_size(self):
+        return self.embed_size
 
     def forward(self,
                 input: torch.Tensor,
@@ -431,7 +438,10 @@ class ConvPredictor(PredictorBase):
         for h in torch.split(cache_0, 1, dim=0):
             history.append([h])
         return history
-
+    
+    def output_size(self):
+        return self.embed_size
+    
     def forward(self,
                 input: torch.Tensor,
                 cache: Optional[List[torch.Tensor]] = None):

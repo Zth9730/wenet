@@ -26,16 +26,15 @@ import yaml
 from tensorboardX import SummaryWriter
 from torch.utils.data import DataLoader
 from wenet.dataset.dataset_s3 import Dataset
+# from wenet.dataset.dataset import Dataset
+
 from wenet.utils.checkpoint import (load_checkpoint, save_checkpoint,
                                     load_trained_modules)
 from wenet.utils.config import override_config
 from wenet.utils.file_utils import read_symbol_table
-from wenet.utils.scheduler import WarmupLR
+from wenet.utils.scheduler import WarmupLR, ConstantLR
 from wenet.utils.init_model import init_model
-# from wenet.utils.executor_ssl import Executor
-from wenet.utils.executor import Executor
-
-
+from wenet.utils.executor_ssl import Executor
 
 def get_args():
     parser = argparse.ArgumentParser(description='training your network')
@@ -144,23 +143,21 @@ def main():
     formatter = logging.Formatter('%(asctime)s %(levelname)s %(message)s')
     file_handler.setFormatter(formatter)
     logger.addHandler(file_handler)
-
     os.environ['CUDA_VISIBLE_DEVICES'] = str(args.local_rank)
-    print(args.local_rank)
+    # print(args.local_rank)
 
     # Set random seed
-    torch.manual_seed(777)
+    torch.manual_seed(444)
     with open(args.config, 'r') as fin:
         configs = yaml.load(fin, Loader=yaml.FullLoader)
     if len(args.override_config) > 0:
         configs = override_config(configs, args.override_config)
-
     args.world_size = int(os.environ["WORLD_SIZE"])
     args.rank = int(os.environ['RANK'])
-
+    
     distributed = args.world_size > 1
     if distributed:
-        logging.info('training on multiple gpus, this gpu {}'.format(
+        logger.info('training on multiple gpus, this gpu {}'.format(
             args.rank))
         dist.init_process_group(args.dist_backend, init_method="env://")
         # dist.init_process_group(args.dist_backend,
@@ -173,15 +170,14 @@ def main():
     train_conf = configs['dataset_conf']
     cv_conf = copy.deepcopy(train_conf)
     cv_conf['shuffle'] = False
-
     train_dataset = Dataset(args.data_type, args.train_data, symbol_table,
-                            train_conf, True)
+                            train_conf, args.bpe_model, True)
     cv_dataset = Dataset(args.data_type,
                          args.cv_data,
                          symbol_table,
                          cv_conf,
+                         args.bpe_model,
                          partition=False)
-
     train_data_loader = DataLoader(train_dataset,
                                    batch_size=None,
                                    pin_memory=args.pin_memory,
@@ -217,24 +213,23 @@ def main():
     # Init asr model from configs
     model = init_model(configs)
     print(model)
-    num_params = sum(p.numel() for p in model.parameters())
-    print('the number of model params: {}'.format(num_params))
 
     # !!!IMPORTANT!!!
     # Try to export the model by script, if fails, we should refine
     # the code to satisfy the script export requirements
-    # if args.rank == 0:
+    if args.rank == 0:
         # script_model = torch.jit.script(model)
         # script_model.save(os.path.join(args.model_dir, 'init.zip'))
+        pass
     executor = Executor()
     # If specify checkpoint, load some info from checkpoint
     if args.checkpoint is not None:
         infos = load_checkpoint(model, args.checkpoint)
     elif args.enc_init is not None:
-        logging.info('load pretrained encoders: {}'.format(args.enc_init))
+        logger.info('load pretrained encoders: {}'.format(args.enc_init))
         infos = load_trained_modules(model, args)
     elif args.partial_modules_path is not None:
-        logging.info('load partial module: {}'.format(
+        logger.info('load partial module: {}'.format(
             args.partial_modules_path))
         infos = load_checkpoint(model, args.partial_modules_path)
     else:
@@ -251,6 +246,15 @@ def main():
         exp_id = os.path.basename(model_dir)
         writer = SummaryWriter(os.path.join(args.tensorboard_dir, exp_id))
 
+    # if args.rank == 0:
+    #     # import pdb
+    #     # pdb.set_trace()
+    #     # xx = torch.load(args.checkpoint)
+        
+    #     for names, params in model.state_dict().items():
+    #         writer.add_histogram(tag=names, values=params.reshape(-1))
+    # exit()
+    
     if distributed:
         assert (torch.cuda.is_available())
         # cuda model is required for nn.parallel.DistributedDataParallel
@@ -268,8 +272,11 @@ def main():
         device = torch.device('cuda' if use_cuda else 'cpu')
         model = model.to(device)
 
-    optimizer = optim.Adam(model.parameters(), **configs['optim_conf'])
+    optimizer = optim.Adam(filter(lambda p: p.requires_grad, model.parameters()), **configs['optim_conf'])
+    # optimizer = optim.SGD(model.parameters(), **configs['optim_conf'])
+#
     scheduler = WarmupLR(optimizer, **configs['scheduler_conf'])
+    # scheduler = ConstantLR(optimizer)
     final_epoch = None
     configs['rank'] = args.rank
     configs['is_distributed'] = distributed
@@ -286,30 +293,39 @@ def main():
     if args.use_amp:
         scaler = torch.cuda.amp.GradScaler()
 
+    
     for epoch in range(start_epoch, num_epochs):
         train_dataset.set_epoch(epoch)
         configs['epoch'] = epoch
         lr = optimizer.param_groups[0]['lr']
-        logging.info('Epoch {} TRAIN info lr {}'.format(epoch, lr))
+        logger.info('Epoch {} TRAIN info lr {}'.format(epoch, lr))
         executor.train(model, optimizer, scheduler, train_data_loader, device,
-                       writer, configs, scaler, logger)
-        total_loss, num_seen_utts = executor.cv(model, cv_data_loader, device,
-                                                configs, logger)
-        cv_loss = total_loss / num_seen_utts
-        logging.info('Epoch {} CV info cv_loss {}'.format(epoch, cv_loss))
-        if args.rank == 0:
-            save_model_path = os.path.join(model_dir, '{}.pt'.format(epoch))
-            save_checkpoint(
-                model, save_model_path, {
-                    'epoch': epoch,
-                    'lr': lr,
-                    'cv_loss': cv_loss,
-                    'step': executor.step
-                })
-            writer.add_scalar('epoch/test_loss', cv_loss, epoch)
-            writer.add_scalar('epoch/lr', lr, epoch)
-        final_epoch = epoch
+                       writer, configs, scaler, logger, model_dir)
+        # total_loss_dict, num_seen_utts = executor.cv(model, cv_data_loader, device,
+        #                                         configs, logger)
+        
+        # cv_loss_dict = {}
+        # for name, value in total_loss_dict.items():
+        #     cv_loss_dict['cv_' + name] = value / num_seen_utts
+        #     logger.info('name {} value {}'.format(name, value))
+        # cv_loss = total_loss_dict['total_loss'] / num_seen_utts
 
+        # logger.info('Epoch {} CV info cv_loss {}'.format(epoch, cv_loss))
+        # if args.rank == 0:
+        #     save_model_path = os.path.join(model_dir, '{}.pt'.format(epoch))
+        #     save_infos = {
+        #             'epoch': epoch,
+        #             'lr': lr,
+        #             'cv_loss': cv_loss,
+        #             'step': executor.step
+        #         }
+        #     # save_infos.update(cv_loss_dict)
+        #     save_checkpoint(
+        #         model, save_model_path, save_infos)
+        #     writer.add_scalar('epoch/test_loss', cv_loss, epoch)
+        #     writer.add_scalar('epoch/lr', lr, epoch)
+        
+        final_epoch = epoch
     if final_epoch is not None and args.rank == 0:
         final_model_path = os.path.join(model_dir, 'final.pt')
         os.symlink('{}.pt'.format(final_epoch), final_model_path)
