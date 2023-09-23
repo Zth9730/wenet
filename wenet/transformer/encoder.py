@@ -35,7 +35,7 @@ from wenet.transformer.subsampling import LinearNoSubsampling
 from wenet.utils.common import get_activation
 from wenet.utils.mask import make_pad_mask
 from wenet.utils.mask import add_optional_chunk_mask
-
+from transformers import AutoTokenizer, BertModel
 
 class BaseEncoder(torch.nn.Module):
     def __init__(
@@ -55,6 +55,11 @@ class BaseEncoder(torch.nn.Module):
         use_dynamic_chunk: bool = False,
         global_cmvn: torch.nn.Module = None,
         use_dynamic_left_chunk: bool = False,
+        use_prompt: bool = False,
+        vocab_size: int = 0,
+        multimodal_pos_type: str = "rel_pos",
+        multimodal_proj: bool = True,
+        prompt_embed_type: str = "embedding",
     ):
         """
         Args:
@@ -108,6 +113,7 @@ class BaseEncoder(torch.nn.Module):
             raise ValueError("unknown input_layer: " + input_layer)
 
         self.global_cmvn = global_cmvn
+        self.multimodal_proj = multimodal_proj
         self.embed = subsampling_class(
             input_size,
             output_size,
@@ -121,6 +127,24 @@ class BaseEncoder(torch.nn.Module):
         self.use_dynamic_chunk = use_dynamic_chunk
         self.use_dynamic_left_chunk = use_dynamic_left_chunk
 
+        self.use_prompt = use_prompt
+        if self.use_prompt:
+            self.prompt_embed_type = prompt_embed_type
+            if prompt_embed_type == 'bert':
+                self.tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased")
+                self.prompt_embed = BertModel.from_pretrained("bert-base-uncased")
+                sematic_dim = self.prompt_embed.config.hidden_size
+            else:
+                self.prompt_embed = torch.nn.Embedding(vocab_size, output_size, 0)
+                sematic_dim = output_size
+            if multimodal_pos_type == "abs_pos":
+                self.multimodal_pe = PositionalEncoding(output_size, positional_dropout_rate)
+            elif multimodal_pos_type == "rel_pos":
+                self.multimodal_pe = RelPositionalEncoding(output_size, positional_dropout_rate)
+
+            if self.multimodal_proj:
+                self.semantic_proj = torch.nn.Linear(output_size, output_size)
+                self.acoustic_proj = torch.nn.Linear(output_size, output_size)
     def output_size(self) -> int:
         return self._output_size
 
@@ -128,6 +152,8 @@ class BaseEncoder(torch.nn.Module):
         self,
         xs: torch.Tensor,
         xs_lens: torch.Tensor,
+        prompts: torch.Tensor,
+        prompts_lens: torch.Tensor,
         decoding_chunk_size: int = 0,
         num_decoding_left_chunks: int = -1,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
@@ -162,6 +188,24 @@ class BaseEncoder(torch.nn.Module):
                                               decoding_chunk_size,
                                               self.static_chunk_size,
                                               num_decoding_left_chunks)
+
+        if self.use_prompt:
+            if self.prompt_embed_type == 'bert':
+                inputs = tokenizer(prompts_text, return_tensors="pt")
+                with torch.no_grad():
+                    outputs = self.prompt_embed(**inputs)
+                    prompt_features = outputs.last_hidden_state
+            else:
+                prompt_features = self.prompt_embed(prompts)
+            if self.multimodal_proj:
+                xs = self.acoustic_proj(xs)
+                prompt_features = self.semantic_proj(prompt_features)
+            xs = torch.cat([prompt_features, xs], dim=1)
+            prompt_masks = ~make_pad_mask(prompts_lens, prompts.size(1)).unsqueeze(1)
+            chunk_masks = torch.cat([prompt_masks, chunk_masks], dim=-1)
+            xs, pos_emb = self.multimodal_pe(xs, 0)
+            mask_pad = torch.cat([prompt_masks, mask_pad], dim=-1)
+            
         for layer in self.encoders:
             xs, chunk_masks, _, _ = layer(xs, chunk_masks, pos_emb, mask_pad)
         if self.normalize_before:
@@ -169,6 +213,8 @@ class BaseEncoder(torch.nn.Module):
         # Here we assume the mask is not changed in encoder layers, so just
         # return the masks before encoder layers, and the masks will be used
         # for cross attention with decoder later
+        if self.use_prompt:
+            xs = xs[:, prompts.size(1):, :]
         return xs, masks
 
     def forward_chunk(
@@ -338,6 +384,10 @@ class TransformerEncoder(BaseEncoder):
         use_dynamic_chunk: bool = False,
         global_cmvn: torch.nn.Module = None,
         use_dynamic_left_chunk: bool = False,
+        use_prompt: bool = False,
+        vocab_size: int = 0,
+        multimodal_pos_type: str = "rel_pos",
+        multimodal_proj: bool = True,
     ):
         """ Construct TransformerEncoder
 
@@ -348,7 +398,8 @@ class TransformerEncoder(BaseEncoder):
                          positional_dropout_rate, attention_dropout_rate,
                          input_layer, pos_enc_layer_type, normalize_before,
                          static_chunk_size, use_dynamic_chunk,
-                         global_cmvn, use_dynamic_left_chunk)
+                         global_cmvn, use_dynamic_left_chunk, use_prompt,
+                         vocab_size,multimodal_pos_type, multimodal_proj)
         self.encoders = torch.nn.ModuleList([
             TransformerEncoderLayer(
                 output_size,
@@ -387,6 +438,11 @@ class ConformerEncoder(BaseEncoder):
         cnn_module_kernel: int = 15,
         causal: bool = False,
         cnn_module_norm: str = "batch_norm",
+        use_prompt: bool = False,
+        vocab_size: int = 0,
+        multimodal_pos_type: str = "rel_pos",
+        multimodal_proj: bool = True,
+
     ):
         """Construct ConformerEncoder
 
@@ -409,7 +465,8 @@ class ConformerEncoder(BaseEncoder):
                          positional_dropout_rate, attention_dropout_rate,
                          input_layer, pos_enc_layer_type, normalize_before,
                          static_chunk_size, use_dynamic_chunk,
-                         global_cmvn, use_dynamic_left_chunk)
+                         global_cmvn, use_dynamic_left_chunk, use_prompt,
+                         vocab_size,multimodal_pos_type, multimodal_proj)
         activation = get_activation(activation_type)
 
         # self-attention module definition

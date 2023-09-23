@@ -57,6 +57,7 @@ class ASRModel(torch.nn.Module):
         lsm_weight: float = 0.0,
         length_normalized_loss: bool = False,
         lfmmi_dir: str = '',
+        use_query_prompt = False,
     ):
         assert 0.0 <= ctc_weight <= 1.0, ctc_weight
 
@@ -68,7 +69,7 @@ class ASRModel(torch.nn.Module):
         self.ignore_id = ignore_id
         self.ctc_weight = ctc_weight
         self.reverse_weight = reverse_weight
-
+        self.use_query_prompt = use_query_prompt
         self.encoder = encoder
         self.decoder = decoder
         self.ctc = ctc
@@ -89,6 +90,8 @@ class ASRModel(torch.nn.Module):
         speech_lengths: torch.Tensor,
         text: torch.Tensor,
         text_lengths: torch.Tensor,
+        query: torch.Tensor,
+        query_lengths: torch.Tensor,
     ) -> Dict[str, Optional[torch.Tensor]]:
         """Frontend + Encoder + Decoder + Calc loss
 
@@ -104,8 +107,8 @@ class ASRModel(torch.nn.Module):
         assert (speech.shape[0] == speech_lengths.shape[0] == text.shape[0] ==
                 text_lengths.shape[0]), (speech.shape, speech_lengths.shape,
                                          text.shape, text_lengths.shape)
-        # 1. Encoder
-        encoder_out, encoder_mask = self.encoder(speech, speech_lengths)
+        # 1. Encoder            
+        encoder_out, encoder_mask = self.encoder(speech, speech_lengths, query, query_lengths)  # (B, maxlen, encoder_dim)
         encoder_out_lens = encoder_mask.squeeze(1).sum(1)
 
         # 2a. Attention-decoder branch
@@ -173,6 +176,8 @@ class ASRModel(torch.nn.Module):
         self,
         speech: torch.Tensor,
         speech_lengths: torch.Tensor,
+        query: torch.Tensor,
+        query_lengths: torch.Tensor,
         decoding_chunk_size: int = -1,
         num_decoding_left_chunks: int = -1,
         simulate_streaming: bool = False,
@@ -189,6 +194,8 @@ class ASRModel(torch.nn.Module):
             encoder_out, encoder_mask = self.encoder(
                 speech,
                 speech_lengths,
+                query,
+                query_lengths,
                 decoding_chunk_size=decoding_chunk_size,
                 num_decoding_left_chunks=num_decoding_left_chunks
             )  # (B, maxlen, encoder_dim)
@@ -312,6 +319,8 @@ class ASRModel(torch.nn.Module):
         self,
         speech: torch.Tensor,
         speech_lengths: torch.Tensor,
+        query: torch.Tensor,
+        query_lengths: torch.Tensor,
         decoding_chunk_size: int = -1,
         num_decoding_left_chunks: int = -1,
         simulate_streaming: bool = False,
@@ -357,6 +366,8 @@ class ASRModel(torch.nn.Module):
         self,
         speech: torch.Tensor,
         speech_lengths: torch.Tensor,
+        query: torch.Tensor,
+        query_lengths: torch.Tensor,
         beam_size: int,
         decoding_chunk_size: int = -1,
         num_decoding_left_chunks: int = -1,
@@ -458,6 +469,8 @@ class ASRModel(torch.nn.Module):
         self,
         speech: torch.Tensor,
         speech_lengths: torch.Tensor,
+        query: torch.Tensor,
+        query_lengths: torch.Tensor,
         beam_size: int,
         decoding_chunk_size: int = -1,
         num_decoding_left_chunks: int = -1,
@@ -481,7 +494,7 @@ class ASRModel(torch.nn.Module):
         Returns:
             List[int]: CTC prefix beam search nbest results
         """
-        hyps, _ = self._ctc_prefix_beam_search(speech, speech_lengths,
+        hyps, _ = self._ctc_prefix_beam_search(speech, speech_lengths,query, query_lengths,
                                                beam_size, decoding_chunk_size,
                                                num_decoding_left_chunks,
                                                simulate_streaming,
@@ -492,6 +505,8 @@ class ASRModel(torch.nn.Module):
         self,
         speech: torch.Tensor,
         speech_lengths: torch.Tensor,
+        query: torch.Tensor,
+        query_lengths: torch.Tensor,
         beam_size: int,
         decoding_chunk_size: int = -1,
         num_decoding_left_chunks: int = -1,
@@ -532,7 +547,7 @@ class ASRModel(torch.nn.Module):
         assert batch_size == 1
         # encoder_out: (1, maxlen, encoder_dim), len(hyps) = beam_size
         hyps, encoder_out = self._ctc_prefix_beam_search(
-            speech, speech_lengths, beam_size, decoding_chunk_size,
+            speech, speech_lengths, query, query_lengths, beam_size, decoding_chunk_size,
             num_decoding_left_chunks, simulate_streaming, context_graph)
 
         assert len(hyps) == beam_size
@@ -563,8 +578,8 @@ class ASRModel(torch.nn.Module):
         decoder_out = decoder_out.cpu().numpy()
         # r_decoder_out will be 0.0, if reverse_weight is 0.0 or decoder is a
         # conventional transformer decoder.
-        r_decoder_out = torch.nn.functional.log_softmax(r_decoder_out, dim=-1)
-        r_decoder_out = r_decoder_out.cpu().numpy()
+        # r_decoder_out = torch.nn.functional.log_softmax(r_decoder_out, dim=-1)
+        # r_decoder_out = r_decoder_out.cpu().numpy()
         # Only use decoder score for rescoring
         best_score = -float('inf')
         best_index = 0

@@ -26,7 +26,6 @@ import torchaudio.compliance.kaldi as kaldi
 from torch.nn.utils.rnn import pad_sequence
 
 torchaudio.utils.sox_utils.set_buffer_size(16500)
-
 AUDIO_FORMAT_SETS = set(['flac', 'mp3', 'm4a', 'ogg', 'opus', 'wav', 'wma'])
 
 import glob
@@ -215,11 +214,11 @@ def filter(data,
             continue
         if len(sample['label']) > token_max_length:
             continue
-        # if num_frames != 0:
-        #     if len(sample['label']) / num_frames < min_output_input_ratio:
-        #         continue
-        #     if len(sample['label']) / num_frames > max_output_input_ratio:
-        #         continue
+        if num_frames != 0:
+            if len(sample['label']) / num_frames < min_output_input_ratio:
+                continue
+            if len(sample['label']) / num_frames > max_output_input_ratio:
+                continue
         yield sample
 
 
@@ -340,7 +339,7 @@ def compute_mfcc(data,
                          high_freq=high_freq,
                          low_freq=low_freq,
                          sample_frequency=sample_rate)
-        yield dict(key=sample['key'], label=sample['label'], feat=mat)
+        yield dict(key=sample['key'], label=sample['label'], feat=mat, query_label=sample['query_label'])
 
 
 def __tokenize_by_bpe_model(sp, txt):
@@ -401,7 +400,6 @@ def tokenize_letters(data, symbol_table):
                 query_label.append(symbol_table['<unk>'])
         sample['query_tokens'] = query_tokens
         sample['query_label'] = query_label
-
         yield sample
 
 def tokenize(data,
@@ -731,7 +729,6 @@ def padding(data):
         ]
         label_lengths = torch.tensor([x.size(0) for x in sorted_labels],
                                      dtype=torch.int32)
-        
         sorted_query_labels = [
             torch.tensor(sample[i]['query_label'], dtype=torch.int64) for i in order
         ]
@@ -746,6 +743,6 @@ def padding(data):
                                     padding_value=-1)
         padding_query_labels = pad_sequence(sorted_query_labels,
                                     batch_first=True,
-                                    padding_value=-1)
+                                    padding_value=0)
         yield (sorted_keys, padded_feats, padding_labels, padding_query_labels, feats_lengths,
                label_lengths, query_label_lengths)

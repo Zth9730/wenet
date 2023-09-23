@@ -21,6 +21,7 @@ from wenet.transformer.asr_model import ASRModel
 from wenet.transformer.cmvn import GlobalCMVN
 from wenet.transformer.ctc import CTC
 from wenet.transformer.decoder import BiTransformerDecoder, TransformerDecoder
+from wenet.transformer.multimodal_decoder import SemanticMultimodalDecoder
 from wenet.transformer.encoder import ConformerEncoder, TransformerEncoder
 from wenet.branchformer.encoder import BranchformerEncoder
 from wenet.squeezeformer.encoder import SqueezeformerEncoder
@@ -28,7 +29,7 @@ from wenet.efficient_conformer.encoder import EfficientConformerEncoder
 from wenet.paraformer.paraformer import Paraformer
 from wenet.cif.predictor import Predictor
 from wenet.utils.cmvn import load_cmvn
-
+import torch.nn as nn
 
 def init_model(configs):
     if configs['cmvn_file'] is not None:
@@ -48,10 +49,12 @@ def init_model(configs):
     if encoder_type == 'conformer':
         encoder = ConformerEncoder(input_dim,
                                    global_cmvn=global_cmvn,
+                                   vocab_size= vocab_size,
                                    **configs['encoder_conf'])
     elif encoder_type == 'squeezeformer':
         encoder = SqueezeformerEncoder(input_dim,
                                        global_cmvn=global_cmvn,
+                                       vocab_size= vocab_size,
                                        **configs['encoder_conf'])
     elif encoder_type == 'efficientConformer':
         encoder = EfficientConformerEncoder(input_dim,
@@ -64,13 +67,18 @@ def init_model(configs):
     elif encoder_type == 'branchformer':
         encoder = BranchformerEncoder(input_dim,
                                       global_cmvn=global_cmvn,
+                                      vocab_size= vocab_size,
                                       **configs['encoder_conf'])
     else:
         encoder = TransformerEncoder(input_dim,
                                      global_cmvn=global_cmvn,
+                                     vocab_size=vocab_size,
                                      **configs['encoder_conf'])
     if decoder_type == 'transformer':
         decoder = TransformerDecoder(vocab_size, encoder.output_size(),
+                                     **configs['decoder_conf'])
+    elif decoder_type == 'semantic':
+        decoder = SemanticMultimodalDecoder(vocab_size, encoder.output_size(),
                                      **configs['decoder_conf'])
     else:
         assert 0.0 < configs['model_conf']['reverse_weight'] < 1.0

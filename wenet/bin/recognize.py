@@ -270,6 +270,8 @@ def main():
             target = target.to(device)
             feats_lengths = feats_lengths.to(device)
             target_lengths = target_lengths.to(device)
+            query = query.to(device)
+            query_length = query_length.to(device)
             if args.mode == 'attention':
                 hyps, _ = model.recognize(
                     feats,
@@ -283,6 +285,8 @@ def main():
                 hyps, _ = model.ctc_greedy_search(
                     feats,
                     feats_lengths,
+                    query,
+                    query_length,
                     decoding_chunk_size=args.decoding_chunk_size,
                     num_decoding_left_chunks=args.num_decoding_left_chunks,
                     simulate_streaming=args.simulate_streaming)
@@ -348,6 +352,8 @@ def main():
                 hyp, _ = model.ctc_prefix_beam_search(
                     feats,
                     feats_lengths,
+                    query,
+                    query_length,
                     args.beam_size,
                     decoding_chunk_size=args.decoding_chunk_size,
                     num_decoding_left_chunks=args.num_decoding_left_chunks,
@@ -359,6 +365,8 @@ def main():
                 hyp, _ = model.attention_rescoring(
                     feats,
                     feats_lengths,
+                    query,
+                    query_length,
                     args.beam_size,
                     decoding_chunk_size=args.decoding_chunk_size,
                     num_decoding_left_chunks=args.num_decoding_left_chunks,
@@ -408,7 +416,6 @@ def main():
             for i, key in enumerate(keys):
                 content = []
                 for w in hyps[i]:
-                    print(w)
                     if w == eos:
                         break
                     content.append(char_dict[w])
