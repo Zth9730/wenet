@@ -5,7 +5,7 @@ export NCCL_DEBUG=INFO
 # exp_tag=bestrq_all_global_cmvn_new_for_new_nospec_sp_noam_long
 # exp_tag=all_cmvn_600m_new_test_continue
 # exp_tag=douyin_tts_small
-exp_tag=librispeech_cmvn_pro_noln_dynamic_6
+exp_tag=librispeech_cmvn_pro_noln_dynamic_6_5conv
 echo "begin training"
 export master=`scontrol show hostname $SLURM_NODELIST | head -n1`
 nodes=`scontrol show hostname $SLURM_NODELIST | wc -l`
@@ -49,5 +49,5 @@ time python launch.py  --nproc_per_node=8 --master_port=52019 \
            --num_workers 4 \
            --tensorboard_dir  ${tensorboard} \
            --cmvn  $cmvn \
-           $cmvn_opts \
+           $cmvn_opts 
            --checkpoint $checkpoint
