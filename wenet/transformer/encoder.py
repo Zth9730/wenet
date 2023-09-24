@@ -41,6 +41,7 @@ class BaseEncoder(torch.nn.Module):
     def __init__(
         self,
         input_size: int,
+        vocab_size: int = 0,
         output_size: int = 256,
         attention_heads: int = 4,
         linear_units: int = 2048,
@@ -55,11 +56,10 @@ class BaseEncoder(torch.nn.Module):
         use_dynamic_chunk: bool = False,
         global_cmvn: torch.nn.Module = None,
         use_dynamic_left_chunk: bool = False,
-        use_prompt: bool = False,
-        vocab_size: int = 0,
+        use_prompt: bool = False,    
         multimodal_pos_type: str = "rel_pos",
         multimodal_proj: bool = True,
-        prompt_embed_type: str = "embedding",
+        embed_type: str = "embedding",
     ):
         """
         Args:
@@ -129,8 +129,8 @@ class BaseEncoder(torch.nn.Module):
 
         self.use_prompt = use_prompt
         if self.use_prompt:
-            self.prompt_embed_type = prompt_embed_type
-            if prompt_embed_type == 'bert':
+            self.prompt_embed_type = embed_type
+            if self.prompt_embed_type == 'bert':
                 self.tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased")
                 self.prompt_embed = BertModel.from_pretrained("bert-base-uncased")
                 sematic_dim = self.prompt_embed.config.hidden_size
@@ -143,7 +143,7 @@ class BaseEncoder(torch.nn.Module):
                 self.multimodal_pe = RelPositionalEncoding(output_size, positional_dropout_rate)
 
             if self.multimodal_proj:
-                self.semantic_proj = torch.nn.Linear(output_size, output_size)
+                self.semantic_proj = torch.nn.Linear(sematic_dim, output_size)
                 self.acoustic_proj = torch.nn.Linear(output_size, output_size)
     def output_size(self) -> int:
         return self._output_size
@@ -154,6 +154,7 @@ class BaseEncoder(torch.nn.Module):
         xs_lens: torch.Tensor,
         prompts: torch.Tensor,
         prompts_lens: torch.Tensor,
+        prompts_text: list,
         decoding_chunk_size: int = 0,
         num_decoding_left_chunks: int = -1,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
@@ -190,22 +191,25 @@ class BaseEncoder(torch.nn.Module):
                                               num_decoding_left_chunks)
 
         if self.use_prompt:
+
             if self.prompt_embed_type == 'bert':
-                inputs = tokenizer(prompts_text, return_tensors="pt")
+                inputs = self.tokenizer(prompts_text, return_tensors="pt", padding=True).to(xs.device)
+                prompt_masks = inputs['attention_mask'].unsqueeze(1).to(torch.bool)
                 with torch.no_grad():
                     outputs = self.prompt_embed(**inputs)
                     prompt_features = outputs.last_hidden_state
             else:
                 prompt_features = self.prompt_embed(prompts)
+                prompt_masks = ~make_pad_mask(prompts_lens, prompts.size(1)).unsqueeze(1)
+
             if self.multimodal_proj:
                 xs = self.acoustic_proj(xs)
                 prompt_features = self.semantic_proj(prompt_features)
             xs = torch.cat([prompt_features, xs], dim=1)
-            prompt_masks = ~make_pad_mask(prompts_lens, prompts.size(1)).unsqueeze(1)
+
             chunk_masks = torch.cat([prompt_masks, chunk_masks], dim=-1)
-            xs, pos_emb = self.multimodal_pe(xs, 0)
             mask_pad = torch.cat([prompt_masks, mask_pad], dim=-1)
-            
+            xs, pos_emb = self.multimodal_pe(xs, 0)
         for layer in self.encoders:
             xs, chunk_masks, _, _ = layer(xs, chunk_masks, pos_emb, mask_pad)
         if self.normalize_before:
@@ -214,7 +218,7 @@ class BaseEncoder(torch.nn.Module):
         # return the masks before encoder layers, and the masks will be used
         # for cross attention with decoder later
         if self.use_prompt:
-            xs = xs[:, prompts.size(1):, :]
+            xs = xs[:, prompt_features.size(1):, :]
         return xs, masks
 
     def forward_chunk(
@@ -370,6 +374,7 @@ class TransformerEncoder(BaseEncoder):
     def __init__(
         self,
         input_size: int,
+        vocab_size: int = 0,
         output_size: int = 256,
         attention_heads: int = 4,
         linear_units: int = 2048,
@@ -385,21 +390,21 @@ class TransformerEncoder(BaseEncoder):
         global_cmvn: torch.nn.Module = None,
         use_dynamic_left_chunk: bool = False,
         use_prompt: bool = False,
-        vocab_size: int = 0,
         multimodal_pos_type: str = "rel_pos",
         multimodal_proj: bool = True,
+        embed_type: str= "bert"
     ):
         """ Construct TransformerEncoder
 
         See Encoder for the meaning of each parameter.
         """
-        super().__init__(input_size, output_size, attention_heads,
+        super().__init__(input_size, vocab_size, attention_heads,
                          linear_units, num_blocks, dropout_rate,
                          positional_dropout_rate, attention_dropout_rate,
                          input_layer, pos_enc_layer_type, normalize_before,
                          static_chunk_size, use_dynamic_chunk,
                          global_cmvn, use_dynamic_left_chunk, use_prompt,
-                         vocab_size,multimodal_pos_type, multimodal_proj)
+                         multimodal_pos_type, multimodal_proj, embed_type)
         self.encoders = torch.nn.ModuleList([
             TransformerEncoderLayer(
                 output_size,
@@ -416,6 +421,7 @@ class ConformerEncoder(BaseEncoder):
     def __init__(
         self,
         input_size: int,
+        vocab_size: int = 0,
         output_size: int = 256,
         attention_heads: int = 4,
         linear_units: int = 2048,
@@ -439,10 +445,9 @@ class ConformerEncoder(BaseEncoder):
         causal: bool = False,
         cnn_module_norm: str = "batch_norm",
         use_prompt: bool = False,
-        vocab_size: int = 0,
         multimodal_pos_type: str = "rel_pos",
         multimodal_proj: bool = True,
-
+        embed_type: str = "embedding"
     ):
         """Construct ConformerEncoder
 
@@ -460,13 +465,13 @@ class ConformerEncoder(BaseEncoder):
             cnn_module_kernel (int): Kernel size of convolution module.
             causal (bool): whether to use causal convolution or not.
         """
-        super().__init__(input_size, output_size, attention_heads,
+        super().__init__(input_size, vocab_size, output_size, attention_heads,
                          linear_units, num_blocks, dropout_rate,
                          positional_dropout_rate, attention_dropout_rate,
                          input_layer, pos_enc_layer_type, normalize_before,
                          static_chunk_size, use_dynamic_chunk,
                          global_cmvn, use_dynamic_left_chunk, use_prompt,
-                         vocab_size,multimodal_pos_type, multimodal_proj)
+                         multimodal_pos_type, multimodal_proj, embed_type)
         activation = get_activation(activation_type)
 
         # self-attention module definition

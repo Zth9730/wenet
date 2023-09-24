@@ -265,7 +265,7 @@ def main():
 
     with torch.no_grad(), open(args.result_file, 'w') as fout:
         for batch_idx, batch in enumerate(test_data_loader):
-            keys, feats, target, query, feats_lengths, target_lengths, query_length = batch
+            keys, feats, target, query, feats_lengths, target_lengths, query_length, query_text = batch
             feats = feats.to(device)
             target = target.to(device)
             feats_lengths = feats_lengths.to(device)
@@ -287,6 +287,7 @@ def main():
                     feats_lengths,
                     query,
                     query_length,
+                    query_text,
                     decoding_chunk_size=args.decoding_chunk_size,
                     num_decoding_left_chunks=args.num_decoding_left_chunks,
                     simulate_streaming=args.simulate_streaming)
@@ -354,6 +355,7 @@ def main():
                     feats_lengths,
                     query,
                     query_length,
+                    query_text,
                     args.beam_size,
                     decoding_chunk_size=args.decoding_chunk_size,
                     num_decoding_left_chunks=args.num_decoding_left_chunks,
@@ -367,6 +369,7 @@ def main():
                     feats_lengths,
                     query,
                     query_length,
+                    query_text,
                     args.beam_size,
                     decoding_chunk_size=args.decoding_chunk_size,
                     num_decoding_left_chunks=args.num_decoding_left_chunks,

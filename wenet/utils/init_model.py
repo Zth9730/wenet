@@ -30,6 +30,8 @@ from wenet.paraformer.paraformer import Paraformer
 from wenet.cif.predictor import Predictor
 from wenet.utils.cmvn import load_cmvn
 import torch.nn as nn
+from peft import LoraConfig, get_peft_model, AdaLoraConfig, PeftModel, prepare_model_for_kbit_training
+from transformers import Seq2SeqTrainer, Seq2SeqTrainingArguments, WhisperForConditionalGeneration, WhisperProcessor
 
 def init_model(configs):
     if configs['cmvn_file'] is not None:
@@ -46,7 +48,28 @@ def init_model(configs):
     encoder_type = configs.get('encoder', 'conformer')
     decoder_type = configs.get('decoder', 'bitransformer')
 
+    if configs.get('whisper', False):
+        model = WhisperForConditionalGeneration.from_pretrained(confgs['whisper_conf']['base_model'],
+                                                        load_in_8bit=confgs['whisper_conf']['use_8bit'],
+                                                        device_map=confgs['whisper_conf']['device_map'],
+                                                        local_files_only=confgs['whisper_conf']['local_files_only'])
+        model.config.forced_decoder_ids = None
+        model.config.suppress_tokens = []
+                # 量化模型
+        model = prepare_model_for_kbit_training(model)
+        # 注册forward，否则多卡训练会失败
+        model.model.encoder.conv1.register_forward_hook(make_inputs_require_grad)
+        if confgs['whisper_conf'].get('use_lora', True):
+            target_modules = ["k_proj", "q_proj", "v_proj", "out_proj", "fc1", "fc2"]
+            if confgs['whisper_conf']['use_adalora']:
+                config = AdaLoraConfig(init_r=12, target_r=4, beta1=0.85, beta2=0.85, tinit=200, tfinal=1000, deltaT=10,
+                                    lora_alpha=32, lora_dropout=0.1, orth_reg_weight=0.5, target_modules=target_modules)
+            else:
+                config = LoraConfig(r=32, lora_alpha=64, target_modules=target_modules, lora_dropout=0.05, bias="none")
+        model = get_peft_model(model, config)
+        return model
     if encoder_type == 'conformer':
+        print(configs['encoder_conf'])
         encoder = ConformerEncoder(input_dim,
                                    global_cmvn=global_cmvn,
                                    vocab_size= vocab_size,

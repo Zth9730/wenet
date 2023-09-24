@@ -59,7 +59,7 @@ class Executor:
         num_seen_utts = 0
         with model_context():
             for batch_idx, batch in enumerate(data_loader):
-                key, feats, target, query, feats_lengths, target_lengths, query_lengths = batch
+                key, feats, target, query, feats_lengths, target_lengths, query_lengths, prompts_text = batch
 
                 feats = feats.to(device)
                 target = target.to(device)
@@ -103,7 +103,7 @@ class Executor:
                         # https://pytorch.org/docs/stable/notes/amp_examples.html
                         with torch.cuda.amp.autocast(scaler is not None):
                             loss_dict = model(key, feats, feats_lengths, target,
-                                            target_lengths, query, query_lengths)
+                                            target_lengths, query, query_lengths, prompts_text)
                             loss = loss_dict['loss'] / accum_grad
 
                         if use_amp:
@@ -175,7 +175,7 @@ class Executor:
         total_loss = 0.0
         with torch.no_grad():
             for batch_idx, batch in enumerate(data_loader):
-                key, feats, target, query, feats_lengths, target_lengths, query_length = batch
+                key, feats, target, query, feats_lengths, target_lengths, query_length, prompts_text = batch
                 feats = feats.to(device)
                 target = target.to(device)
                 feats_lengths = feats_lengths.to(device)
@@ -193,7 +193,7 @@ class Executor:
                         loss_dict = model(feats, feats_lengths,
                                           target, target_lengths)
                 else:
-                    loss_dict = model(key, feats, feats_lengths, target, target_lengths, query, query_length)
+                    loss_dict = model(key, feats, feats_lengths, target, target_lengths, query, query_length, prompts_text)
                 loss = loss_dict['loss']
                 if torch.isfinite(loss):
                     num_seen_utts += num_utts

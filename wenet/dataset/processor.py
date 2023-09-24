@@ -170,7 +170,7 @@ def parse_raw(data):
                            wav_query=wav_query)
             yield example
         except Exception as ex:
-            logging.warning('Failed to read {}'.format(wav_file))
+            logging.warning('Failed to read {}'.format(key))
 
 
 def filter(data,
@@ -302,7 +302,7 @@ def compute_fbank(data,
                           dither=dither,
                           energy_floor=0.0,
                           sample_frequency=sample_rate)
-        yield dict(key=sample['key'], label=sample['label'], feat=mat, query_label=sample['query_label'])
+        yield dict(key=sample['key'], label=sample['label'], feat=mat, query_label=sample['query_label'], query_text=sample['txt_query'])
 
 
 def compute_mfcc(data,
@@ -744,5 +744,6 @@ def padding(data):
         padding_query_labels = pad_sequence(sorted_query_labels,
                                     batch_first=True,
                                     padding_value=0)
+        query_text = [sample[i]['query_text'] for i in order]                 
         yield (sorted_keys, padded_feats, padding_labels, padding_query_labels, feats_lengths,
-               label_lengths, query_label_lengths)
+               label_lengths, query_label_lengths, query_text)

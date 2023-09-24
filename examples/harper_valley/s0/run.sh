@@ -6,8 +6,8 @@
 
 # Use this to control how many gpu you use, It's 1-gpu training if you specify
 # just 1gpu, otherwise it's is multiple gpu training based on DDP in pytorch
-export CUDA_VISIBLE_DEVICES="0,1,2"
-stage=4 # start from 0 if you need to start from data preparation
+# export CUDA_VISIBLE_DEVICES="0,1,2"
+stage=5 # start from 0 if you need to start from data preparation
 stop_stage=5
 # data
 data_url=www.openslr.org/resources/12
@@ -22,13 +22,13 @@ checkpoint=
 cmvn=true
 do_delta=false
 
-dir=exp/sp_spec_aug_5_spec_encoder_transformer_3
+dir=exp/sp_spec_aug_5_spec
 
 # use average_checkpoint will get better result
 average_checkpoint=true
 decode_checkpoint=$dir/final.pt
 # maybe you can try to adjust it if you can not get close results as README.md
-average_num=10
+average_num=5
 # decode_modes="attention_rescoring"
 decode_modes="ctc_greedy_search ctc_prefix_beam_search attention_rescoring"
 
@@ -193,7 +193,7 @@ if [ ${stage} -le 5 ] && [ ${stop_stage} -ge 5 ]; then
     for mode in ${decode_modes}; do
     {
       {
-        test_dir=$dir/${test}_${mode}
+        test_dir=$dir/${test}_${mode}_${average_num}
         mkdir -p $test_dir
         gpu_id=$(echo $CUDA_VISIBLE_DEVICES | cut -d',' -f$[$idx+1])
         python wenet/bin/recognize.py --gpu $gpu_id \

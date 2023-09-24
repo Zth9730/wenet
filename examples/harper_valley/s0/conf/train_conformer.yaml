@@ -9,14 +9,17 @@ encoder_conf:
     dropout_rate: 0.1
     positional_dropout_rate: 0.1
     attention_dropout_rate: 0.1
-    input_layer: conv2d # encoder input type, you can chose conv2d, conv2d6 and conv2d8
+    input_layer: 'conv2d' # encoder input type, you can chose conv2d, conv2d6 and conv2d8
     normalize_before: true
     cnn_module_kernel: 15
     use_cnn_module: True
     activation_type: 'swish'
-    pos_enc_layer_type: 'no_pos'
+    pos_enc_layer_type: 'rel_pos'
     selfattention_layer_type: 'rel_selfattn'
-    use_prompt: true
+    use_prompt: false
+    multimodal_pos_type: "rel_pos"
+    multimodal_proj: True
+    embed_type: 'bert'
 # encoder: transformer
 # encoder_conf:
 #     output_size: 256    # dimension of attention
@@ -77,7 +80,7 @@ dataset_conf:
         reverse: true
     batch_conf:
         batch_type: 'static' # static or dynamic
-        batch_size: 16
+        batch_size: 48
 
 grad_clip: 5
 accum_grad: 1
