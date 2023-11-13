@@ -25,7 +25,7 @@ from subprocess import PIPE, Popen
 from urllib.parse import urlparse
 import io
 from petrel_client.client import Client
-
+import numpy as np
 import torch
 import torchaudio
 import torchaudio.compliance.kaldi as kaldi
@@ -152,12 +152,13 @@ def tar_file_and_group(data, client=None, vad=None):
                                             waveform, sample_rate = torchaudio.load(trimWav)
                                     else:
                                         waveform, sample_rate = torchaudio.load(fobj)
-                                    nbytes = random.randint(0,400) 
-                                    n_zeros = torch.zeros(1,nbytes*16)
+                                        
+                                    # nbytes = random.randint(0,400) 
+                                    # n_zeros = torch.zeros(1,nbytes*16)
                                     
-                                    nbytes = random.randint(0,400) 
-                                    n_haed_zeros = torch.zeros(1,nbytes*16)
-                                    waveform = torch.concat([n_haed_zeros, waveform, n_zeros], 1)
+                                    # nbytes = random.randint(0,400) 
+                                    # n_haed_zeros = torch.zeros(1,nbytes*16)
+                                    # waveform = torch.concat([n_haed_zeros, waveform, n_zeros], 1)
                                 example['wav'] = waveform
                                 example['sample_rate'] = sample_rate
                                 valid = True
@@ -212,6 +213,19 @@ def parse_raw(data):
             yield example
         except Exception as ex:
             logging.warning('Failed to read {}'.format(wav_file))
+            
+def crop_to_max_size(data, target_size):
+    for sample in data:
+        size = len(wav)
+        diff = size - target_size
+        if diff <= 0:
+            return wav, 0
+
+        start, end = 0, target_size
+        if self.random_crop:
+            start = np.random.randint(0, diff + 1)
+            end = size - diff + start
+        return wav[start:end], start
 
 
 def filter(data,
@@ -220,7 +234,9 @@ def filter(data,
            token_max_length=200,
            token_min_length=1,
            min_output_input_ratio=0.0005,
-           max_output_input_ratio=1):
+           max_output_input_ratio=1,
+           crop=False,
+           random_crop=True):
     """ Filter sample according to feature and label length
         Inplace operation.
 
@@ -253,14 +269,18 @@ def filter(data,
         if num_frames < min_length:
             continue
         if num_frames > max_length:
-            # steps = int(max_length*sample['sample_rate'] / 100)
-            # for idx in range(0, sample['wav'].shape[1], steps):
-            #     cut_wav = sample.copy()
-            #     cut_wav['wav'] = sample['wav'][:,idx:idx+steps]
-            #     if cut_wav['wav'].size(1) / sample['sample_rate'] * 100 < min_length:
-            #         continue
-            #     yield cut_wav
-            continue
+            if crop:
+                size = int(num_frames / 100 * sample['sample_rate'])
+                target_size = int(max_length / 100 * sample['sample_rate'])
+                diff = size - target_size
+                start, end = 0, target_size
+                if random_crop:
+                    start = np.random.randint(0, diff + 1)
+                    end = size - diff + start
+                sample['wav'] = sample['wav'][:, start:end]
+                yield sample
+            else: 
+                continue
         # if len(sample['label']) < token_min_length:
         #     continue
         # if len(sample['label']) > token_max_length:
@@ -382,7 +402,7 @@ def compute_fbank(data,
                           num_mel_bins=num_mel_bins,
                           frame_length=frame_length,
                           frame_shift=frame_shift,
-                          dither=0,
+                          dither=dither,
                           energy_floor=0.0,
                           sample_frequency=sample_rate)
         infer = True

@@ -15,14 +15,15 @@ class Executor:
     def __init__(self):
         self.step = 0
         self.back_loss = 100000
-    def train(self, model, optimizer, scheduler, data_loader, device, writer,
+    def train(self, model, optimizer, scheduler, data_loader, cv_data_loader, device, writer,
               args, scaler, logger, model_dir):
         ''' Train one epoch
         '''
         model.train()
         clip = args.get('grad_clip', 50.0)
         log_interval = args.get('log_interval', 10)
-        save_interval = args.get('save_interval', 2000)
+        save_interval = args.get('save_interval', 5000)
+        finish_step = args.get('step_nums', 400000)
         rank = args.get('rank', 0)
         epoch = args.get('epoch', 0)
         accum_grad = args.get('accum_grad', 1)
@@ -75,7 +76,7 @@ class Executor:
                             enabled=ds_dtype is not None,
                             dtype=ds_dtype, cache_enabled=False
                         ):
-                            loss_dict = model(feats, feats_lengths)
+                            loss_dict = model(feats, feats_lengths, self.step)
                         loss = loss_dict['loss']
                         # NOTE(xcsong): Zeroing the gradients is handled automatically by DeepSpeed after the weights # noqa
                         #   have been updated using a mini-batch. DeepSpeed also performs gradient averaging automatically # noqa
@@ -89,7 +90,7 @@ class Executor:
                         # The more details about amp can be found in
                         # https://pytorch.org/docs/stable/notes/amp_examples.html
                         with torch.cuda.amp.autocast(scaler is not None):
-                            loss_dict, target_ids = model(feats, feats_lengths)
+                            loss_dict, target_ids = model(feats, feats_lengths, self.step)
                             target_ids_all.append(target_ids.reshape(-1))
                             loss = loss_dict['loss'] / accum_grad
                         if use_amp:
@@ -114,8 +115,10 @@ class Executor:
                         # pdb.set_trace()
                         # gradients = torch.autograd.grad(loss, model.parameters())
                         # writer.add_scalar('grad_norm', gradients, self.step)
-                        writer.add_scalar('train_loss', loss, self.step)
-                        writer.add_scalar('train_codes_acc', loss_dict['codes_acc'], self.step)
+                        for keys, values in loss_dict.items():
+                            if values:
+                                writer.add_scalar(keys, values, self.step)
+                        # writer.add_scalar('train_codes_acc', loss_dict['codes_acc'], self.step)
                     # Use mixed precision training
                     if use_amp:
                         scaler.unscale_(optimizer)
@@ -161,23 +164,57 @@ class Executor:
                 #     logger.info('rank {} error keys are: {}'.format(rank, key))
                 # else:
                 #     self.back_loss = loss
-                if rank == 0 and self.step !=0 and self.step % save_interval == 0:
+                
+                if self.step !=0 and self.step % save_interval == 0:
+                    total_loss_dict, num_seen_utts = self.cv(model, cv_data_loader, device, args, logger)
+                    cv_loss_dict = {}
+                    for name, value in total_loss_dict.items():
+                        if value is not None:
+                            cv_loss_dict['cv_' + name] = value / num_seen_utts
+                            logger.info('name {} value {}'.format(name, value))
+                    cv_loss = total_loss_dict['total_loss'] / num_seen_utts
+                    if rank == 0:
+                    
                     # writer.add_histogram(tag='last_layer_conv_norm', values=model.module.encoder.encoders[-1].norm_conv.weight, global_step=self.step)
                     # writer.add_histogram(tag='last_layer_ffn_norm', values=model.module.encoder.encoders[-1].norm_ff.weight, global_step=self.step)
                     # writer.add_histogram(tag='last_layer_self-attn_norm', values=model.module.encoder.encoders[-1].norm_mha.weight, global_step=self.step)
-
-                    infos = {
-                    'epoch': epoch, 'lr': lr, 'step': self.step,
-                    'save_time': datetime.datetime.now().strftime('%d/%m/%Y %H:%M:%S')}
-                    with open("{}/{}.yaml".format(model_dir, self.step), 'w') as fout:
-                        data = yaml.dump(infos)
-                        fout.write(data)
-                    save_model_path = os.path.join(model_dir, '{}.pt'.format(self.step))
-                    save_checkpoint(model, save_model_path, infos)
+            
+                        logger.info('Epoch {} CV info cv_loss {}'.format(epoch, cv_loss))
+                        save_model_path = os.path.join(model_dir, '{}.pt'.format(self.step))
+                        save_infos = {
+                                'epoch': epoch,
+                                'lr': lr,
+                                'cv_loss': cv_loss,
+                                'step': self.step
+                            }
+                        # save_infos.update(cv_loss_dict)
+                        save_checkpoint(
+                            model, save_model_path, save_infos)
+                        writer.add_scalar('epoch/cv_loss', cv_loss, epoch)
+                        writer.add_scalar('epoch/lr', lr, epoch)
+                    # infos = {
+                    # 'epoch': epoch, 'lr': lr, 'step': self.step,
+                    # 'save_time': datetime.datetime.now().strftime('%d/%m/%Y %H:%M:%S')}
+                    # with open("{}/{}.yaml".format(model_dir, self.step), 'w') as fout:
+                    #     data = yaml.dump(infos)
+                    #     fout.write(data)
+                    # save_model_path = os.path.join(model_dir, '{}.pt'.format(self.step))
+                    # save_checkpoint(model, save_model_path, infos)
                     target_ids_all = torch.cat(target_ids_all, dim=0).reshape(-1)
                     logger.info('epoch {} codebook embedding usage number: {}'.format(epoch, target_ids_all.unique().numel()))
                     target_ids_all = []
-
+            
+                if rank == 0 and self.step == finish_step:
+                    infos = {
+                        'epoch': epoch, 'lr': lr, 'step': self.step,
+                        'save_time': datetime.datetime.now().strftime('%d/%m/%Y %H:%M:%S')}
+                    with open("{}/last.yaml".format(model_dir), 'w') as fout:
+                        data = yaml.dump(infos)
+                        fout.write(data)
+                    save_model_path = os.path.join(model_dir, 'last.pt')
+                    save_checkpoint(model, save_model_path, infos)
+                    break
+            
         target_ids_all = torch.cat(target_ids_all, dim=0).reshape(-1)
         logger.info('epoch {} codebook embedding usage number: {}'.format(epoch, target_ids_all.unique().numel()))
         if writer is not None and epoch==0:
@@ -201,7 +238,7 @@ class Executor:
         total_loss = 0.0
         with torch.no_grad():
             for batch_idx, batch in enumerate(data_loader):
-                key, feats, feats_lengths = batch
+                key, feats, labels, feats_lengths, label_lengths = batch
                 feats = feats.to(device)
                 feats_lengths = feats_lengths.to(device)
                 num_utts = feats.size(0)
@@ -212,10 +249,11 @@ class Executor:
                         enabled=ds_dtype is not None,
                         dtype=ds_dtype, cache_enabled=False
                     ):
-                        loss_dict = model(feats, feats_lengths,
-                                          target, target_lengths)
+                        loss_dict, _ = model(feats, feats_lengths,
+                                          self.step)
                 else:
-                    loss_dict = model(feats, feats_lengths, target, target_lengths)
+                    loss_dict, _ = model(feats, feats_lengths, self.step)
+                loss = loss_dict['loss']
                 if torch.isfinite(loss):
                     num_seen_utts += num_utts
                     total_loss += loss.item() * num_utts
@@ -233,4 +271,6 @@ class Executor:
                     log_str += ' rank {}'.format(rank)
                     logging.info(log_str)
                     logger.info(log_str)
-        return total_loss, num_seen_utts
+                loss_dict['total_loss'] = total_loss
+            model.train()
+        return loss_dict, num_seen_utts

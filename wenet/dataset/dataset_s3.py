@@ -116,7 +116,7 @@ class DataList(IterableDataset):
 
 
 def Dataset(data_type, data_list_file, symbol_table, conf,
-            bpe_model=None, partition=True):
+            bpe_model=None, partition=True, train=False):
     
     """ Construct dataset from arguments
 
@@ -131,7 +131,10 @@ def Dataset(data_type, data_list_file, symbol_table, conf,
     """
 
     assert data_type in ['raw', 'shard']
-    lists = read_lists(data_list_file) * 10000
+    if train:
+        lists = read_lists(data_list_file) * 10000
+    else:
+        lists = read_lists(data_list_file)
     shuffle = conf.get('shuffle', True)
     dataset = DataList(lists, shuffle=shuffle, partition=partition)
     if data_type == 'shard':

@@ -171,7 +171,7 @@ def main():
     cv_conf = copy.deepcopy(train_conf)
     cv_conf['shuffle'] = False
     train_dataset = Dataset(args.data_type, args.train_data, symbol_table,
-                            train_conf, args.bpe_model, True)
+                            train_conf, args.bpe_model, True, train=True)
     cv_dataset = Dataset(args.data_type,
                          args.cv_data,
                          symbol_table,
@@ -271,8 +271,11 @@ def main():
         use_cuda = args.gpu >= 0 and torch.cuda.is_available()
         device = torch.device('cuda' if use_cuda else 'cpu')
         model = model.to(device)
-
-    optimizer = optim.Adam(filter(lambda p: p.requires_grad, model.parameters()), **configs['optim_conf'])
+        
+    if configs['optim'] == 'adam':
+        optimizer = optim.Adam(filter(lambda p: p.requires_grad, model.parameters()), **configs['optim_conf'])
+    elif configs['optim'] == 'adamw':
+        optimizer = optim.AdamW(filter(lambda p: p.requires_grad, model.parameters()), **configs['optim_conf'])
     # optimizer = optim.SGD(model.parameters(), **configs['optim_conf'])
 #
     scheduler = WarmupLR(optimizer, **configs['scheduler_conf'])
@@ -299,7 +302,7 @@ def main():
         configs['epoch'] = epoch
         lr = optimizer.param_groups[0]['lr']
         logger.info('Epoch {} TRAIN info lr {}'.format(epoch, lr))
-        executor.train(model, optimizer, scheduler, train_data_loader, device,
+        executor.train(model, optimizer, scheduler, train_data_loader, cv_data_loader, device,
                        writer, configs, scaler, logger, model_dir)
         # total_loss_dict, num_seen_utts = executor.cv(model, cv_data_loader, device,
         #                                         configs, logger)

@@ -27,6 +27,7 @@ from wenet.transformer.embedding import RelPositionalEncoding
 from wenet.transformer.embedding import NoPositionalEncoding
 from wenet.transformer.encoder_layer import TransformerEncoderLayer
 from wenet.transformer.encoder_layer import ConformerEncoderLayer, RealConformerEncoderLayer
+from wenet.transformer.layer_dropout import LayerDropModuleList
 from wenet.transformer.positionwise_feed_forward import PositionwiseFeedForward
 from wenet.transformer.subsampling import Conv2dSubsampling4
 from wenet.transformer.subsampling import Conv2dSubsampling6
@@ -155,6 +156,7 @@ class BaseEncoder(torch.nn.Module):
             masks: torch.Tensor batch padding mask after subsample
                 (B, 1, T' ~= T/subsample_rate)
         """
+
         T = xs.size(1)
         masks = ~make_pad_mask(xs_lens, T).unsqueeze(1)  # (B, 1, T)
         if self.global_cmvn is not None:
@@ -182,6 +184,67 @@ class BaseEncoder(torch.nn.Module):
         # return the masks before encoder layers, and the masks will be used
         # for cross attention with decoder later
         return xs, masks
+    def _forward(
+        self, xs: torch.Tensor,
+        xs_lens: torch.Tensor,
+        decoding_chunk_size: int = 0,
+        num_decoding_left_chunks: int = -1,
+    ):
+        
+        """Reconstruct the original encoder's forward to return the results of each layer
+
+        Args:
+            xs: padded input tensor (B, T, D)
+            xs_lens: input length (B)
+            decoding_chunk_size: decoding chunk size for dynamic chunk
+                0: default for training, use random dynamic chunk.
+                <0: for decoding, use full chunk.
+                >0: for decoding, use fixed chunk size as set.
+            num_decoding_left_chunks: number of left chunks, this is for decoding,
+            the chunk size is decoding_chunk_size.
+                >=0: use num_decoding_left_chunks
+                <0: use all left chunks
+        Returns:
+            encoder output tensor xs, and subsampled masks
+            xs: padded output tensor (B, T' ~= T/subsample_rate, D)
+            masks: torch.Tensor batch padding mask after subsample
+                (B, 1, T' ~= T/subsample_rate)
+        """
+
+        T = xs.size(1)
+        masks = ~make_pad_mask(xs_lens, T).unsqueeze(1)  # (B, 1, T)
+        if self.global_cmvn is not None:
+            xs = self.global_cmvn(xs)
+        xs, pos_emb, masks = self.embed(xs, masks)
+        mask_pad = masks  # (B, 1, T/subsample_rate)
+        chunk_masks = add_optional_chunk_mask(xs, masks,
+                                              self.use_dynamic_chunk,
+                                              self.use_dynamic_left_chunk,
+                                              decoding_chunk_size,
+                                              self.static_chunk_size,
+                                              num_decoding_left_chunks)
+        intermediate_results = []
+        
+        if self.real:
+            p_attn = torch.zeros((0, 0, 0, 0))
+            for layer in self.encoders:
+                xs, chunk_masks, _, _, p_attn = layer(xs, chunk_masks, pos_emb, mask_pad, p_attn=p_attn)
+                intermediate_results.append(xs)
+        else:
+            for layer in self.encoders:
+                xs, chunk_masks, _, _ = layer(xs, chunk_masks, pos_emb, mask_pad)
+                intermediate_results.append(xs)
+
+        if self.last_ln:
+            if self.normalize_before:
+                xs = self.after_norm(xs)
+                intermediate_results[-1] = xs
+        # Here we assume the mask is not changed in encoder layers, so just
+        # return the masks before encoder layers, and the masks will be used
+        # for cross attention with decoder later
+        return xs, masks, intermediate_results
+        
+       
 
     def forward_chunk(
         self,
@@ -402,6 +465,7 @@ class ConformerEncoder(BaseEncoder):
         last_ln = True,
         realformer = False,
         adanorm=False,
+        layer_dropout_rate: float = 0.0,
     ):
         """Construct ConformerEncoder
 
@@ -466,7 +530,11 @@ class ConformerEncoder(BaseEncoder):
                 ) for _ in range(num_blocks)
             ])
         else:
-            self.encoders = torch.nn.ModuleList([
+            if layer_dropout_rate == 0.0:
+                self.encoders = torch.nn.ModuleList([])
+            else:
+                self.encoders = LayerDropModuleList(p=dropout_rate)
+            self.encoders.extend([
                 ConformerEncoderLayer(
                     output_size,
                     encoder_selfattn_layer(*encoder_selfattn_layer_args),

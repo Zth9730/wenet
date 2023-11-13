@@ -27,6 +27,8 @@ from wenet.squeezeformer.encoder import SqueezeformerEncoder
 from wenet.efficient_conformer.encoder import EfficientConformerEncoder
 from wenet.paraformer.paraformer import Paraformer
 from wenet.ssl.bestrq.bestqr_model import BestRQModel
+from wenet.ssl.wav2vec2.wav2vec2_model import Wav2vec2Model
+from wenet.ssl.w2vbert.w2vbert_model import W2VBERTModel
 from wenet.cif.predictor import Predictor
 from wenet.utils.cmvn import load_cmvn
 
@@ -120,6 +122,10 @@ def init_model(configs):
                            **configs['model_conf'])
     elif 'ssl_conf' in configs:
         model = BestRQModel(encoder, **configs['ssl_conf'])
+    elif 'wav2vec2_conf' in configs:
+        model = Wav2vec2Model(encoder, **configs['wav2vec2_conf'])
+    elif 'w2vbert_conf' in configs:
+        model = W2VBERTModel(encoder, **configs['w2vbert_conf'])
 
     else:
         model = ASRModel(vocab_size=vocab_size,

@@ -7,7 +7,7 @@ from wenet.utils.mask import make_pad_mask
 from wenet.transformer.attention import RelPositionMultiHeadedAttention
 from wenet.transformer.encoder_layer import ConformerEncoderLayer
 
-
+torch.set_printoptions(threshold=1000000000000)
 def quantize_vector(latent: torch.Tensor, codebook: torch.Tensor):
     """
     Symbols in comments:
@@ -190,6 +190,7 @@ class BestRQModel(torch.nn.Module):
         self,
         xs: torch.Tensor,
         xs_lens: torch.Tensor,
+        steps: Optional[int] = None,
     ):
         # import pdb
         # pdb.set_trace()
@@ -210,7 +211,7 @@ class BestRQModel(torch.nn.Module):
         if self.dynamic_mask_length:
             self.mask_length = int(xs.shape[1] / 100 * 1.25)
         xs, masked_masks = self._apply_mask_signal(xs, xs_lens)
-
+        
         # 1 get subsampling mask   #####TODO Mask and stack if correct
         subsampling_masks = masked_masks.unfold(1,
                                                 size=self.stack_frames,
@@ -269,10 +270,11 @@ class BestRQModel(torch.nn.Module):
                                         self.mask_length,
                                         min_masks=self.min_masks,
                                         device=input.device)
-
         masks_expand = masks.unsqueeze(-1)  # [B, T, 1]
         # mask_emb = self.mask_emb.to(input.device).view(1, 1, -1)
-        mask_emb = torch.normal(mean=0, std=0.1, size=(1,input.size(1), input.size(2))).to(input.device)
+        # mask_emb = torch.normal(mean=0, std=0.1, size=(1,input.size(1), input.size(2))).to(input.device)
+        mask_emb = torch.normal(mean=0, std=0.1, size=(1, 1, input.size(2))).to(input.device)
+
         xs = torch.where(masks_expand, mask_emb, input)
         return xs, masks
 
