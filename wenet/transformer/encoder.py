@@ -184,15 +184,18 @@ class BaseEncoder(torch.nn.Module):
             xs, chunk_masks, _, _ = layer(xs, chunk_masks, pos_emb, mask_pad)
         return xs
 
-    @torch.jit.ignore(drop=True)
+    @torch.jit.unused
     def forward_layers_checkpointed(self, xs: torch.Tensor,
                                     chunk_masks: torch.Tensor,
                                     pos_emb: torch.Tensor,
                                     mask_pad: torch.Tensor) -> torch.Tensor:
         for layer in self.encoders:
-            xs, chunk_masks, _, _ = ckpt.checkpoint(layer.__call__, xs,
-                                                    chunk_masks, pos_emb,
-                                                    mask_pad)
+            xs, chunk_masks, _, _ = ckpt.checkpoint(layer.__call__,
+                                                    xs,
+                                                    chunk_masks,
+                                                    pos_emb,
+                                                    mask_pad,
+                                                    use_reentrant=False)
         return xs
 
     def forward_chunk(
@@ -263,12 +266,20 @@ class BaseEncoder(torch.nn.Module):
             # NOTE(xcsong): Before layer.forward
             #   shape(att_cache[i:i + 1]) is (1, head, cache_t1, d_k * 2),
             #   shape(cnn_cache[i])       is (b=1, hidden-dim, cache_t2)
-            xs, _, new_att_cache, new_cnn_cache = layer(
+            if elayers == 0:
+                kv_cache = (att_cache, att_cache)
+            else:
+                i_kv_cache = att_cache[i:i + 1]
+                size = att_cache.size(-1) // 2
+                kv_cache = (i_kv_cache[:, :, :, :size], i_kv_cache[:, :, :,
+                                                                   size:])
+            xs, _, new_kv_cache, new_cnn_cache = layer(
                 xs,
                 att_mask,
                 pos_emb,
-                att_cache=att_cache[i:i + 1] if elayers > 0 else att_cache,
+                att_cache=kv_cache,
                 cnn_cache=cnn_cache[i] if cnn_cache.size(0) > 0 else cnn_cache)
+            new_att_cache = torch.cat(new_kv_cache, dim=-1)
             # NOTE(xcsong): After layer.forward
             #   shape(new_att_cache) is (1, head, attention_key_size, d_k * 2),
             #   shape(new_cnn_cache) is (b=1, hidden-dim, cache_t2)
@@ -371,16 +382,18 @@ class TransformerEncoder(BaseEncoder):
         query_bias: bool = True,
         key_bias: bool = True,
         value_bias: bool = True,
-        mlp_bias: bool = True,
         activation_type: str = "relu",
         gradient_checkpointing: bool = False,
         use_sdpa: bool = False,
-        mlp_type: str = 'position_wise_feed_forward',
         layer_norm_type: str = 'layer_norm',
         norm_eps: float = 1e-5,
         n_kv_head: Optional[int] = None,
         head_dim: Optional[int] = None,
         selfattention_layer_type: str = "selfattn",
+        mlp_type: str = 'position_wise_feed_forward',
+        mlp_bias: bool = True,
+        n_expert: int = 8,
+        n_expert_activated: int = 2,
     ):
         """ Construct TransformerEncoder
 
@@ -404,8 +417,13 @@ class TransformerEncoder(BaseEncoder):
                     attention_heads, output_size, attention_dropout_rate,
                     query_bias, key_bias, value_bias, use_sdpa, n_kv_head,
                     head_dim),
-                mlp_class(output_size, linear_units, dropout_rate, activation,
-                          mlp_bias),
+                mlp_class(output_size,
+                          linear_units,
+                          dropout_rate,
+                          activation,
+                          mlp_bias,
+                          n_expert=n_expert,
+                          n_expert_activated=n_expert_activated),
                 dropout_rate,
                 normalize_before,
                 layer_norm_type=layer_norm_type,
@@ -445,15 +463,17 @@ class ConformerEncoder(BaseEncoder):
         query_bias: bool = True,
         key_bias: bool = True,
         value_bias: bool = True,
-        mlp_bias: bool = True,
         conv_bias: bool = True,
         gradient_checkpointing: bool = False,
         use_sdpa: bool = False,
-        mlp_type: str = 'position_wise_feed_forward',
         layer_norm_type: str = 'layer_norm',
         norm_eps: float = 1e-5,
         n_kv_head: Optional[int] = None,
         head_dim: Optional[int] = None,
+        mlp_type: str = 'position_wise_feed_forward',
+        mlp_bias: bool = True,
+        n_expert: int = 8,
+        n_expert_activated: int = 2,
     ):
         """Construct ConformerEncoder
 
@@ -500,6 +520,8 @@ class ConformerEncoder(BaseEncoder):
             dropout_rate,
             activation,
             mlp_bias,
+            n_expert,
+            n_expert_activated,
         )
         # convolution module definition
         convolution_layer_args = (output_size, cnn_module_kernel, activation,

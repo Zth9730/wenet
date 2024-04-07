@@ -15,9 +15,11 @@
 """Decoder definition."""
 from typing import Dict, Tuple, List, Optional
 
+import os
 import torch
 import torch.utils.checkpoint as ckpt
 import logging
+from wenet.transformer.attention import T_CACHE
 
 from wenet.transformer.decoder_layer import DecoderLayer
 from wenet.utils.class_utils import (
@@ -76,16 +78,18 @@ class TransformerDecoder(torch.nn.Module):
         query_bias: bool = True,
         key_bias: bool = True,
         value_bias: bool = True,
-        mlp_bias: bool = True,
         activation_type: str = "relu",
         gradient_checkpointing: bool = False,
         tie_word_embedding: bool = False,
         use_sdpa: bool = False,
-        mlp_type: str = 'position_wise_feed_forward',
         layer_norm_type: str = 'layer_norm',
         norm_eps: float = 1e-5,
         n_kv_head: Optional[int] = None,
         head_dim: Optional[int] = None,
+        mlp_type: str = 'position_wise_feed_forward',
+        mlp_bias: bool = True,
+        n_expert: int = 8,
+        n_expert_activated: int = 2,
     ):
         super().__init__()
         attention_dim = encoder_output_size
@@ -121,8 +125,13 @@ class TransformerDecoder(torch.nn.Module):
                     attention_heads, attention_dim, src_attention_dropout_rate,
                     query_bias, key_bias, value_bias, use_sdpa, n_kv_head,
                     head_dim) if src_attention else None,
-                mlp_class(attention_dim, linear_units, dropout_rate,
-                          activation, mlp_bias),
+                mlp_class(attention_dim,
+                          linear_units,
+                          dropout_rate,
+                          activation,
+                          mlp_bias,
+                          n_expert=n_expert,
+                          n_expert_activated=n_expert_activated),
                 dropout_rate,
                 normalize_before,
                 layer_norm_type,
@@ -199,14 +208,19 @@ class TransformerDecoder(torch.nn.Module):
                                                      memory_mask)
         return x
 
-    @torch.jit.ignore(drop=True)
+    @torch.jit.unused
     def forward_layers_checkpointed(self, x: torch.Tensor,
                                     tgt_mask: torch.Tensor,
                                     memory: torch.Tensor,
                                     memory_mask: torch.Tensor) -> torch.Tensor:
         for layer in self.decoders:
             x, tgt_mask, memory, memory_mask = ckpt.checkpoint(
-                layer.__call__, x, tgt_mask, memory, memory_mask)
+                layer.__call__,
+                x,
+                tgt_mask,
+                memory,
+                memory_mask,
+                use_reentrant=False)
         return x
 
     def forward_one_step(
@@ -215,7 +229,7 @@ class TransformerDecoder(torch.nn.Module):
         memory_mask: torch.Tensor,
         tgt: torch.Tensor,
         tgt_mask: torch.Tensor,
-        cache: Dict[str, Dict[str, torch.Tensor]],
+        cache: Dict[str, Dict[str, T_CACHE]],
     ) -> torch.Tensor:
         """Forward one step.
             This is only used for decoding.
@@ -269,14 +283,19 @@ class TransformerDecoder(torch.nn.Module):
     def tie_or_clone_weights(self, jit_mode: bool = True):
         """Tie or clone module weights (between word_emb and output_layer)
             depending of whether we are using TorchScript or not"""
+        rank = int(os.environ.get('RANK', 0))
         if not self.use_output_layer:
             return
+        if not self.tie_word_embedding:
+            return
         if jit_mode:
-            logging.info("clone emb.weight to output.weight")
+            if rank == 0:
+                logging.info("clone emb.weight to output.weight")
             self.output_layer.weight = torch.nn.Parameter(
                 self.embed[0].weight.clone())
         else:
-            logging.info("tie emb.weight with output.weight")
+            if rank == 0:
+                logging.info("tie emb.weight with output.weight")
             self.output_layer.weight = self.embed[0].weight
 
         if getattr(self.output_layer, "bias", None) is not None:
@@ -327,10 +346,11 @@ class BiTransformerDecoder(torch.nn.Module):
         input_layer: str = "embed",
         use_output_layer: bool = True,
         normalize_before: bool = True,
+        src_attention: bool = True,
         query_bias: bool = True,
         key_bias: bool = True,
         value_bias: bool = True,
-        mlp_bias: bool = True,
+        activation_type: str = "relu",
         gradient_checkpointing: bool = False,
         tie_word_embedding: bool = False,
         use_sdpa: bool = False,
@@ -338,6 +358,10 @@ class BiTransformerDecoder(torch.nn.Module):
         norm_eps: float = 1e-5,
         n_kv_head: Optional[int] = None,
         head_dim: Optional[int] = None,
+        mlp_type: str = 'position_wise_feed_forward',
+        mlp_bias: bool = True,
+        n_expert: int = 8,
+        n_expert_activated: int = 2,
     ):
 
         super().__init__()
@@ -356,9 +380,11 @@ class BiTransformerDecoder(torch.nn.Module):
             input_layer,
             use_output_layer,
             normalize_before,
+            src_attention=src_attention,
             query_bias=query_bias,
             key_bias=key_bias,
             value_bias=value_bias,
+            activation_type=activation_type,
             gradient_checkpointing=gradient_checkpointing,
             tie_word_embedding=tie_word_embedding,
             use_sdpa=use_sdpa,
@@ -366,7 +392,10 @@ class BiTransformerDecoder(torch.nn.Module):
             norm_eps=norm_eps,
             n_kv_head=n_kv_head,
             head_dim=head_dim,
-        )
+            mlp_type=mlp_type,
+            mlp_bias=mlp_bias,
+            n_expert=n_expert,
+            n_expert_activated=n_expert_activated)
 
         self.right_decoder = TransformerDecoder(
             vocab_size,
@@ -381,10 +410,11 @@ class BiTransformerDecoder(torch.nn.Module):
             input_layer,
             use_output_layer,
             normalize_before,
+            src_attention=src_attention,
             query_bias=query_bias,
             key_bias=key_bias,
             value_bias=value_bias,
-            mlp_bias=mlp_bias,
+            activation_type=activation_type,
             gradient_checkpointing=gradient_checkpointing,
             tie_word_embedding=tie_word_embedding,
             use_sdpa=use_sdpa,
@@ -392,7 +422,10 @@ class BiTransformerDecoder(torch.nn.Module):
             norm_eps=norm_eps,
             n_kv_head=n_kv_head,
             head_dim=head_dim,
-        )
+            mlp_type=mlp_type,
+            mlp_bias=mlp_bias,
+            n_expert=n_expert,
+            n_expert_activated=n_expert_activated)
 
     def forward(
         self,

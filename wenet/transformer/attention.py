@@ -21,7 +21,9 @@ from typing import Optional, Tuple
 import torch
 from torch import nn
 
-from wenet.utils.rope_utils import llama_apply_rotary_emb
+from wenet.utils.rope_utils import WENET_APPLY_ROTARY_EMB
+
+T_CACHE = Tuple[torch.Tensor, torch.Tensor]
 
 
 class MultiHeadedAttention(nn.Module):
@@ -64,7 +66,7 @@ class MultiHeadedAttention(nn.Module):
             self.inner_kv_dim = self.inner_dim
             n_kv_head = n_head
         # We assume d_v always equals d_k
-        self.d_k = n_feat // n_head
+        self.d_k = self.inner_dim // n_head
         assert self.d_k == self.inner_kv_dim // n_kv_head
         self.h = n_head
         self.h_kv = n_kv_head
@@ -78,7 +80,10 @@ class MultiHeadedAttention(nn.Module):
         self.use_sdpa = use_sdpa
         self.dropout_rate = dropout_rate
 
-    def _forward_linearx(self, name: str, x: torch.Tensor) -> torch.Tensor:
+    def _forward_linearx(self,
+                         name: str,
+                         x: torch.Tensor,
+                         head_first: bool = True) -> torch.Tensor:
         assert x.ndim >= 3
         if name == 'query':
             x = self.linear_q(x)
@@ -96,7 +101,9 @@ class MultiHeadedAttention(nn.Module):
 
         # split last dim
         x = x.view(x_shape)
-        x = x.transpose(-3, -2)  # (batch, ...,  head or head_kv, time, d_k)
+        if head_first:
+            x = x.transpose(-3,
+                            -2)  # (batch, ...,  head or head_kv, time, d_k)
         return x
 
     def forward_qkv(
@@ -169,6 +176,56 @@ class MultiHeadedAttention(nn.Module):
         x = x.view(x_shape)  # (batch, ..., time1, d_model)
         return self.linear_out(x)  # (batch, ...,  time1, d_model)
 
+    def _update_kv_and_cache(
+            self,
+            k: torch.Tensor,
+            v: torch.Tensor,
+            cache: T_CACHE,
+            head_first: bool = True
+    ) -> Tuple[torch.Tensor, torch.Tensor, T_CACHE]:
+        new_cache = cache
+        seq_axis = -2 if head_first else -3
+        head_axis = -3 if head_first else -2
+        if not self.training:
+            # NOTE(xcsong):
+            #   when export onnx model, for 1st chunk, we feed
+            #       cache(1, head, 0, d_k * 2) (16/-1, -1/-1, 16/0 mode)
+            #       or cache(1, head, real_cache_t, d_k * 2) (16/4 mode).
+            #       In all modes, `if cache.size(0) > 0` will alwayse be `True`
+            #       and we will always do splitting and
+            #       concatnation(this will simplify onnx export). Note that
+            #       it's OK to concat & split zero-shaped tensors(see code below).
+            #   when export jit  model, for 1st chunk, we always feed
+            #       cache(0, 0, 0, 0) since jit supports dynamic if-branch.
+            # >>> a = torch.ones((1, 2, 0, 4))
+            # >>> b = torch.ones((1, 2, 3, 4))
+            # >>> c = torch.cat((a, b), dim=2)
+            # >>> torch.equal(b, c)        # True
+            # >>> d = torch.split(a, 2, dim=-1)
+            # >>> torch.equal(d[0], d[1])  # True
+            key_cache, value_cache = cache
+            if key_cache.size(0) > 0:
+                k = torch.cat([key_cache, k], dim=seq_axis)
+            if value_cache.size(0) > 0:
+                v = torch.cat([value_cache, v], dim=seq_axis)
+            # NOTE(xcsong): We do cache slicing in encoder.forward_chunk, since it's
+            #   non-trivial to calculate `next_cache_start` here.
+            # new_cache = torch.cat((k, v), dim=-1) if not self.training else cache
+            new_cache = (k, v)
+        # for multi query or multi group attention
+        if self.h_kv != self.h and self.h_kv != 1:
+            k = torch.repeat_interleave(
+                k,
+                self.h // self.h_kv,
+                dim=head_axis,
+            )
+            v = torch.repeat_interleave(
+                v,
+                self.h // self.h_kv,
+                dim=-head_axis,
+            )
+        return k, v, new_cache
+
     def forward(
         self,
         query: torch.Tensor,
@@ -176,8 +233,8 @@ class MultiHeadedAttention(nn.Module):
         value: torch.Tensor,
         mask: torch.Tensor = torch.ones((0, 0, 0), dtype=torch.bool),
         pos_emb: torch.Tensor = torch.empty(0),
-        cache: torch.Tensor = torch.zeros((0, 0, 0, 0))
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        cache: T_CACHE = (torch.zeros(0, 0, 0, 0), torch.zeros(0, 0, 0, 0)),
+    ) -> Tuple[torch.Tensor, T_CACHE]:
         """Compute scaled dot product attention.
 
         Args:
@@ -209,45 +266,7 @@ class MultiHeadedAttention(nn.Module):
 
         """
         q, k, v = self.forward_qkv(query, key, value)
-
-        # NOTE(xcsong):
-        #   when export onnx model, for 1st chunk, we feed
-        #       cache(1, head, 0, d_k * 2) (16/-1, -1/-1, 16/0 mode)
-        #       or cache(1, head, real_cache_t, d_k * 2) (16/4 mode).
-        #       In all modes, `if cache.size(0) > 0` will alwayse be `True`
-        #       and we will always do splitting and
-        #       concatnation(this will simplify onnx export). Note that
-        #       it's OK to concat & split zero-shaped tensors(see code below).
-        #   when export jit  model, for 1st chunk, we always feed
-        #       cache(0, 0, 0, 0) since jit supports dynamic if-branch.
-        # >>> a = torch.ones((1, 2, 0, 4))
-        # >>> b = torch.ones((1, 2, 3, 4))
-        # >>> c = torch.cat((a, b), dim=2)
-        # >>> torch.equal(b, c)        # True
-        # >>> d = torch.split(a, 2, dim=-1)
-        # >>> torch.equal(d[0], d[1])  # True
-        if cache.size(0) > 0:
-            key_cache, value_cache = torch.split(cache,
-                                                 cache.size(-1) // 2,
-                                                 dim=-1)
-            k = torch.cat([key_cache, k], dim=2)
-            v = torch.cat([value_cache, v], dim=2)
-        # NOTE(xcsong): We do cache slicing in encoder.forward_chunk, since it's
-        #   non-trivial to calculate `next_cache_start` here.
-        new_cache = torch.cat((k, v), dim=-1)
-
-        # for multi query or multi group attention
-        if self.h_kv != self.h:
-            k = torch.repeat_interleave(
-                k,
-                self.h // self.h_kv,
-                dim=-3,
-            )
-            v = torch.repeat_interleave(
-                v,
-                self.h // self.h_kv,
-                dim=-3,
-            )
+        k, v, new_cache = self._update_kv_and_cache(k, v, cache)
 
         if not self.use_sdpa:
             scores = torch.matmul(q, k.transpose(-2, -1)) / math.sqrt(self.d_k)
@@ -331,8 +350,8 @@ class RelPositionMultiHeadedAttention(MultiHeadedAttention):
         value: torch.Tensor,
         mask: torch.Tensor = torch.ones((0, 0, 0), dtype=torch.bool),
         pos_emb: torch.Tensor = torch.empty(0),
-        cache: torch.Tensor = torch.zeros((0, 0, 0, 0))
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        cache: T_CACHE = (torch.zeros((0, 0, 0, 0)), torch.zeros((0, 0, 0, 0)))
+    ) -> Tuple[torch.Tensor, T_CACHE]:
         """Compute 'Scaled Dot Product Attention' with rel. positional encoding.
         Args:
             query (torch.Tensor): Query tensor (#batch, time1, size).
@@ -353,46 +372,7 @@ class RelPositionMultiHeadedAttention(MultiHeadedAttention):
         """
         q, k, v = self.forward_qkv(query, key, value)
         q = q.transpose(1, 2)  # (batch, time1, head, d_k)
-
-        # NOTE(xcsong):
-        #   when export onnx model, for 1st chunk, we feed
-        #       cache(1, head, 0, d_k * 2) (16/-1, -1/-1, 16/0 mode)
-        #       or cache(1, head, real_cache_t, d_k * 2) (16/4 mode).
-        #       In all modes, `if cache.size(0) > 0` will alwayse be `True`
-        #       and we will always do splitting and
-        #       concatnation(this will simplify onnx export). Note that
-        #       it's OK to concat & split zero-shaped tensors(see code below).
-        #   when export jit  model, for 1st chunk, we always feed
-        #       cache(0, 0, 0, 0) since jit supports dynamic if-branch.
-        # >>> a = torch.ones((1, 2, 0, 4))
-        # >>> b = torch.ones((1, 2, 3, 4))
-        # >>> c = torch.cat((a, b), dim=2)
-        # >>> torch.equal(b, c)        # True
-        # >>> d = torch.split(a, 2, dim=-1)
-        # >>> torch.equal(d[0], d[1])  # True
-        if cache.size(0) > 0:
-            key_cache, value_cache = torch.split(cache,
-                                                 cache.size(-1) // 2,
-                                                 dim=-1)
-            k = torch.cat([key_cache, k], dim=2)
-            v = torch.cat([value_cache, v], dim=2)
-
-        # NOTE(xcsong): We do cache slicing in encoder.forward_chunk, since it's
-        #   non-trivial to calculate `next_cache_start` here.
-        new_cache = torch.cat((k, v), dim=-1)
-
-        # for multi query or multi groups attention
-        if self.h_kv != self.h:
-            k = torch.repeat_interleave(
-                k,
-                self.h // self.h_kv,
-                dim=-3,
-            )
-            v = torch.repeat_interleave(
-                v,
-                self.h // self.h_kv,
-                dim=-3,
-            )
+        k, v, new_cache = self._update_kv_and_cache(k, v, cache)
 
         n_batch_pos = pos_emb.size(0)
         p = self.linear_pos(pos_emb).view(n_batch_pos, -1, self.h, self.d_k)
@@ -462,20 +442,21 @@ class MultiHeadedCrossAttention(MultiHeadedAttention):
         value: torch.Tensor,
         mask: torch.Tensor = torch.ones((0, 0, 0), dtype=torch.bool),
         pos_emb: torch.Tensor = torch.empty(0),
-        cache: torch.Tensor = torch.zeros((0, 0, 0, 0))
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        cache: T_CACHE = (torch.zeros((0, 0, 0, 0)), torch.zeros((0, 0, 0, 0)))
+    ) -> Tuple[torch.Tensor, T_CACHE]:
         del pos_emb
-        if cache.size(0) > 0:
+        key_cache, value_cache = cache
+        assert key_cache.size(0) == value_cache.size(0)
+        if key_cache.size(0) > 0:
             assert not self.training
             q = self._forward_linearx('query', query)
-            k, v = torch.split(cache, cache.size(-1) // 2, dim=-1)
+            k, v = key_cache, value_cache
 
         else:
             q, k, v = self.forward_qkv(query, key, value)
-        new_cache = torch.cat((k, v), dim=-1)
-
+        new_cache = (k, v) if not self.training else cache
         # for multi query or multi groups attention
-        if self.h_kv != self.h:
+        if self.h_kv != self.h and self.h_kv != 1:
             k = torch.repeat_interleave(
                 k,
                 self.h // self.h_kv,
@@ -486,7 +467,6 @@ class MultiHeadedCrossAttention(MultiHeadedAttention):
                 self.h // self.h_kv,
                 dim=-3,
             )
-
         B = query.size(0)
         Beams = 1
         if B != k.size(0):
@@ -559,17 +539,11 @@ class ShawRelPositionMultiHeadedAttention(MultiHeadedAttention):
         value: torch.Tensor,
         mask: torch.Tensor = torch.ones((0, 0, 0), dtype=torch.bool),
         pos_emb: torch.Tensor = torch.empty(0),
-        cache: torch.Tensor = torch.zeros((0, 0, 0, 0))
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        cache: T_CACHE = (torch.zeros((0, 0, 0, 0)), torch.zeros(0, 0, 0, 0))
+    ) -> Tuple[torch.Tensor, T_CACHE]:
         del pos_emb
         q, k, v = self.forward_qkv(query, key, value)
-        if cache.size(0) > 0:
-            key_cache, value_cache = torch.split(cache,
-                                                 cache.size(-1) // 2,
-                                                 dim=-1)
-            k = torch.cat([key_cache, k], dim=2)
-            v = torch.cat([value_cache, v], dim=2)
-        new_cache = torch.cat((k, v), dim=-1)
+        k, v, new_cache = self._update_kv_and_cache(k, v, cache)
 
         rel_k = self.rel_k_embed(
             self._relative_indices(k.size(2), query.device))  # (t2, t2, d_k)
@@ -615,9 +589,11 @@ class RopeMultiHeadedAttention(MultiHeadedAttention):
                  value_bias: bool = True,
                  use_sdpa: bool = False,
                  n_kv_head: Optional[int] = None,
-                 head_dim: Optional[int] = None):
+                 head_dim: Optional[int] = None,
+                 style='google'):
         super().__init__(n_head, n_feat, dropout_rate, query_bias, key_bias,
                          value_bias, use_sdpa, n_kv_head, head_dim)
+        self.style = style
 
     def forward(
         self,
@@ -626,8 +602,8 @@ class RopeMultiHeadedAttention(MultiHeadedAttention):
         value: torch.Tensor,
         mask: torch.Tensor = torch.ones((0, 0, 0), dtype=torch.bool),
         pos_emb: torch.Tensor = torch.empty(0),
-        cache: torch.Tensor = torch.zeros((0, 0, 0, 0))
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        cache: T_CACHE = (torch.zeros((0, 0, 0, 0)), torch.zeros(0, 0, 0, 0))
+    ) -> Tuple[torch.Tensor, T_CACHE]:
         """Compute rope scaled dot product attention.
 
         Args:
@@ -658,11 +634,13 @@ class RopeMultiHeadedAttention(MultiHeadedAttention):
                 and `head * d_k == size`
 
         """
-        q, k, v = self.forward_qkv(query, key, value)
+        q = self._forward_linearx('query', query, head_first=False)
+        k = self._forward_linearx('key', key, head_first=False)
+        v = self._forward_linearx('value', value, head_first=False)
         # NOTE(Mddct): In order to make the code easier to read,
         #    these two lines are not placed in MultiHeadedAttention.
-        q = llama_apply_rotary_emb(q, pos_emb)
-        k = llama_apply_rotary_emb(k, pos_emb)
+        q = WENET_APPLY_ROTARY_EMB[self.style](q, pos_emb)
+        k = WENET_APPLY_ROTARY_EMB[self.style](k, pos_emb)
         # see above
         if cache.size(0) > 0:
             key_cache, value_cache = torch.split(cache,
@@ -670,20 +648,16 @@ class RopeMultiHeadedAttention(MultiHeadedAttention):
                                                  dim=-1)
             k = torch.cat([key_cache, k], dim=2)
             v = torch.cat([value_cache, v], dim=2)
-        new_cache = torch.cat((k, v), dim=-1)
+        new_cache = torch.cat(
+            (k, v), dim=-1) if not self.training else torch.empty(0, 0, 0, 0)
 
-        if self.h_kv != self.h:
-            k = torch.repeat_interleave(
-                k,
-                self.h // self.h_kv,
-                dim=1,
-            )
-            v = torch.repeat_interleave(
-                v,
-                self.h // self.h_kv,
-                dim=1,
-            )
-
+        k, v, new_cache = self._update_kv_and_cache(k,
+                                                    v,
+                                                    cache,
+                                                    head_first=False)
+        q = q.transpose(1, 2)
+        k = k.transpose(1, 2)
+        v = v.transpose(1, 2)
         if not self.use_sdpa:
             scores = torch.matmul(q, k.transpose(-2, -1)) / math.sqrt(self.d_k)
             return self.forward_attention(v, scores, mask), new_cache

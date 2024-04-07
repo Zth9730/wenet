@@ -15,10 +15,12 @@
 # Modified from ESPnet(https://github.com/espnet/espnet)
 """Encoder self-attention layer definition."""
 
+from functools import partial
 from typing import Optional, Tuple
 
 import torch
 from torch import nn
+from wenet.transformer.attention import T_CACHE
 
 from wenet.utils.class_utils import WENET_NORM_CLASSES
 
@@ -48,14 +50,21 @@ class TransformerEncoderLayer(nn.Module):
         normalize_before: bool = True,
         layer_norm_type: str = 'layer_norm',
         norm_eps: float = 1e-5,
+        rms_norm_offset: bool = True,
     ):
         """Construct an EncoderLayer object."""
         super().__init__()
         self.self_attn = self_attn
         self.feed_forward = feed_forward
         assert layer_norm_type in ['layer_norm', 'rms_norm']
-        self.norm1 = WENET_NORM_CLASSES[layer_norm_type](size, eps=norm_eps)
-        self.norm2 = WENET_NORM_CLASSES[layer_norm_type](size, eps=norm_eps)
+        norm_class = WENET_NORM_CLASSES[layer_norm_type]
+        if layer_norm_type == "rms_norm":
+            norm_class = partial(
+                norm_class,
+                add_unit_offset=rms_norm_offset,
+            )
+        self.norm1 = norm_class(size, eps=norm_eps)
+        self.norm2 = norm_class(size, eps=norm_eps)
         self.dropout = nn.Dropout(dropout_rate)
         self.size = size
         self.normalize_before = normalize_before
@@ -66,9 +75,10 @@ class TransformerEncoderLayer(nn.Module):
         mask: torch.Tensor,
         pos_emb: torch.Tensor,
         mask_pad: torch.Tensor = torch.ones((0, 0, 0), dtype=torch.bool),
-        att_cache: torch.Tensor = torch.zeros((0, 0, 0, 0)),
+        att_cache: T_CACHE = (torch.zeros(
+            (0, 0, 0, 0)), torch.zeros((0, 0, 0, 0))),
         cnn_cache: torch.Tensor = torch.zeros((0, 0, 0, 0)),
-    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    ) -> Tuple[torch.Tensor, torch.Tensor, T_CACHE, torch.Tensor]:
         """Compute encoded features.
 
         Args:
@@ -180,9 +190,10 @@ class ConformerEncoderLayer(nn.Module):
         mask: torch.Tensor,
         pos_emb: torch.Tensor,
         mask_pad: torch.Tensor = torch.ones((0, 0, 0), dtype=torch.bool),
-        att_cache: torch.Tensor = torch.zeros((0, 0, 0, 0)),
+        att_cache: T_CACHE = (torch.zeros(
+            (0, 0, 0, 0)), torch.zeros((0, 0, 0, 0))),
         cnn_cache: torch.Tensor = torch.zeros((0, 0, 0, 0)),
-    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    ) -> Tuple[torch.Tensor, torch.Tensor, T_CACHE, torch.Tensor]:
         """Compute encoded features.
 
         Args:
