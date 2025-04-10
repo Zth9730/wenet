@@ -98,6 +98,12 @@ def main():
 
     # Init asr model from configs
     model, configs = init_model(args, configs)
+    #import pdb
+    #pdb.set_trace()
+    print(f'encoder_parameters = {sum(p.numel() for p in model.encoder.parameters() if p.requires_grad)}')
+    print(f'decoder_parameters = {sum(p.numel() for p in model.decoder.parameters() if p.requires_grad)}')
+    print(f'model_parameters = {sum(p.numel() for p in model.parameters() if p.requires_grad)}')
+    #exit()
 
     if hasattr(args, 'lora_reinit') and args.lora_reinit:
         reinit_lora(model, args, configs, tokenizer)

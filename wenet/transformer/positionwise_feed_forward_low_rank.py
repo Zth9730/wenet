@@ -16,7 +16,26 @@
 
 import torch
 
-class PositionwiseFeedForward(torch.nn.Module):
+class LowRankLinear(torch.nn.Module):
+    """
+    A low-rank linear transformation layer.
+    Decomposes a matrix into two smaller matrices to reduce the number of parameters.
+    """
+    def __init__(self, input_size, output_size, rank):
+        super().__init__()
+        self.input_size = input_size
+        self.output_size = output_size
+        self.rank = rank
+
+        # Initialize low-rank matrices
+        self.linear1 = torch.nn.Linear(input_size, rank, bias = False)
+        self.linear2 = torch.nn.Linear(rank, output_size, bias = True)
+
+    def forward(self, x):
+        return self.linear2(self.linear1(x))  # (batch_size, time_steps, output_size)
+
+
+class PositionwiseFeedForwardLowRank(torch.nn.Module):
     """Positionwise feed forward layer.
 
     FeedForward are appied on each position of the sequence.
@@ -40,12 +59,12 @@ class PositionwiseFeedForward(torch.nn.Module):
         *dummy_args,
         **dummy_kwargs,
     ):
-        """Construct a PositionwiseFeedForward object."""
-        super(PositionwiseFeedForward, self).__init__()
-        self.w_1 = torch.nn.Linear(idim, hidden_units)
+        """Construct a PositionwiseFeedForwardLowRank object."""
+        super(PositionwiseFeedForwardLowRank, self).__init__()
+        self.w_1 = LowRankLinear(idim, hidden_units, rank)
         self.activation = activation
         self.dropout = torch.nn.Dropout(dropout_rate)
-        self.w_2 = torch.nn.Linear(hidden_units, idim)
+        self.w_2 = LowRankLinear(hidden_units, idim, rank)
 
     def forward(self, xs: torch.Tensor) -> torch.Tensor:
         """Forward function.
@@ -88,7 +107,7 @@ class MoEFFNLayer(torch.nn.Module):
         super(MoEFFNLayer, self).__init__()
         self.gate = torch.nn.Linear(idim, n_expert, bias=False)
         self.experts = torch.nn.ModuleList(
-            PositionwiseFeedForward(
+            PositionwiseFeedForwardLowRank(
                 idim, hidden_units, dropout_rate, activation, bias=bias)
             for _ in range(n_expert))
         self.n_expert = n_expert
@@ -135,7 +154,7 @@ class GatedVariantsMLP(torch.nn.Module):
         *dummy_args,
         **dummy_kwargs,
     ):
-        """Construct a PositionwiseFeedForward object."""
+        """Construct a PositionwiseFeedForwardLowRank object."""
         super(GatedVariantsMLP, self).__init__()
         self.gate = torch.nn.Linear(idim, hidden_units, bias=False)
         self.activation = activation

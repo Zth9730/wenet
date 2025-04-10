@@ -472,8 +472,9 @@ class ConformerEncoder(BaseEncoder):
         norm_eps: float = 1e-5,
         n_kv_head: Optional[int] = None,
         head_dim: Optional[int] = None,
-        mlp_type: str = 'position_wise_feed_forward',
+        mlp_type: str = 'position_wise_feed_forward_low_rank',
         mlp_bias: bool = True,
+        rank: int = 6,
         n_expert: int = 8,
         n_expert_activated: int = 2,
         conv_norm_eps: float = 1e-5,
@@ -525,6 +526,7 @@ class ConformerEncoder(BaseEncoder):
             dropout_rate,
             activation,
             mlp_bias,
+            rank,
             n_expert,
             n_expert_activated,
         )

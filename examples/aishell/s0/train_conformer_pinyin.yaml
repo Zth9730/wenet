@@ -1,42 +1,46 @@
 # network architecture
 # encoder related
-encoder: e_branchformer
+encoder: conformer
 encoder_conf:
     output_size: 256    # dimension of attention
-    attention_heads: 8
-    linear_units: 1024  # the number of units of position-wise feed forward
-    num_blocks: 17      # the number of encoder blocks
-    cgmlp_linear_units: 1024
-    cgmlp_conv_kernel: 31
-    use_linear_after_conv: false
-    gate_activation: identity
-    merge_conv_kernel: 31
+    attention_heads: 4
+    linear_units: 2048  # the number of units of position-wise feed forward
+    num_blocks: 6     # the number of encoder blocks
     dropout_rate: 0.1
     positional_dropout_rate: 0.1
-    attention_dropout_rate: 0.1
+    attention_dropout_rate: 0.0
     input_layer: conv2d # encoder input type, you can chose conv2d, conv2d6 and conv2d8
+    normalize_before: true
+    cnn_module_kernel: 15
+    use_cnn_module: True
     activation_type: 'swish'
-    causal: false
+    rank: 20
+    mlp_type: 'position_wise_feed_forward_low_rank'
     pos_enc_layer_type: 'rel_pos'
     selfattention_layer_type: 'rel_selfattn'
+    #parallel_global_local: False
+
 
 # decoder related
 decoder: transformer
 decoder_conf:
     attention_heads: 4
     linear_units: 2048
-    num_blocks: 6
+    num_blocks: 3
     dropout_rate: 0.1
+    mlp_type: 'position_wise_feed_forward_low_rank'
+    rank: 6
     positional_dropout_rate: 0.1
-    self_attention_dropout_rate: 0.1
-    src_attention_dropout_rate: 0.1
+    self_attention_dropout_rate: 0.0
+    src_attention_dropout_rate: 0.0
 
 tokenizer: char
 tokenizer_conf:
-  symbol_table_path: 'data/dict/lang_char.txt'
-  split_with_space: false
+  symbol_table_path: '/data_new/wangyuwen/wenet/examples/aishell/s0/data/pinyin_aishell_kespeech/pinyin_char.txt'
+  split_with_space: true
   bpe_path: null
   non_lang_syms_path: null
+  connect_symbol: " "
   is_multilingual: false
   num_languages: 1
   special_tokens:
@@ -51,7 +55,7 @@ ctc_conf:
 
 cmvn: global_cmvn
 cmvn_conf:
-  cmvn_file: 'data/train/global_cmvn'
+  cmvn_file: '/data2/wangyuwen/output/global_cmvn'
   is_json_cmvn: true
 
 # hybrid CTC/attention
@@ -64,7 +68,7 @@ model_conf:
 dataset: asr
 dataset_conf:
     filter_conf:
-        max_length: 40960
+        max_length: 1500
         min_length: 0
         token_max_length: 200
         token_min_length: 1
@@ -75,39 +79,31 @@ dataset_conf:
         num_mel_bins: 80
         frame_shift: 10
         frame_length: 25
-        dither: 1.0
+        dither: 0.1
     spec_aug: true
     spec_aug_conf:
         num_t_mask: 2
         num_f_mask: 2
         max_t: 50
         max_f: 10
-    spec_sub: true
-    spec_sub_conf:
-        num_t_sub: 3
-        max_t: 30
-    spec_trim: false
-    spec_trim_conf:
-        max_t: 50
-    shuffle: true
+    shuffle: false
     shuffle_conf:
         shuffle_size: 1500
-    sort: true
+    sort: false
     sort_conf:
-        sort_size: 500  # sort_size should be less than shuffle_size
+        sort_size: 2000  # sort_size should be less than shuffle_size
     batch_conf:
         batch_type: 'static' # static or dynamic
-        batch_size: 32
+        batch_size: 16
 
 grad_clip: 5
-accum_grad: 1
+accum_grad: 4
 max_epoch: 240
 log_interval: 100
 
 optim: adam
 optim_conf:
-    lr: 0.001
-    weight_decay: 0.000001
+    lr: 0.002
 scheduler: warmuplr     # pytorch v1.1.0+ required
 scheduler_conf:
-    warmup_steps: 35000
+    warmup_steps: 25000

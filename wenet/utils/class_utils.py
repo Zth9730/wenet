@@ -22,10 +22,12 @@ from wenet.transformer.embedding import (
 from wenet.transformer.norm import RMSNorm
 from wenet.transformer.positionwise_feed_forward import (
     GatedVariantsMLP, MoEFFNLayer, PositionwiseFeedForward)
+from wenet.transformer.positionwise_feed_forward_low_rank import (
+    GatedVariantsMLP, MoEFFNLayer, PositionwiseFeedForwardLowRank)
 from wenet.transformer.subsampling import (
     Conv1dSubsampling2, Conv2dSubsampling4, Conv2dSubsampling6,
     Conv2dSubsampling8, EmbedinigNoSubsampling, LinearNoSubsampling,
-    StackNFramesSubsampling)
+    StackNFramesSubsampling, Conv2dSubsampling4V2)
 from wenet.transformer.swish import Swish
 
 WENET_ACTIVATION_CLASSES = {
@@ -54,7 +56,8 @@ WENET_SUBSAMPLE_CLASSES = {
     "conv2d8": Conv2dSubsampling8,
     'paraformer_dummy': torch.nn.Identity,
     'stack_n_frames': StackNFramesSubsampling,
-    'firered_conv2d4': FireRedConv2dSubsampling4
+    'firered_conv2d4': FireRedConv2dSubsampling4,
+    'conv2d_v2': Conv2dSubsampling4V2,
 }
 
 WENET_EMB_CLASSES = {
@@ -82,7 +85,8 @@ WENET_ATTENTION_CLASSES = {
 WENET_MLP_CLASSES = {
     'position_wise_feed_forward': PositionwiseFeedForward,
     'moe': MoEFFNLayer,
-    'gated': GatedVariantsMLP
+    'gated': GatedVariantsMLP,
+    'position_wise_feed_forward_low_rank': PositionwiseFeedForwardLowRank
 }
 
 WENET_NORM_CLASSES = {

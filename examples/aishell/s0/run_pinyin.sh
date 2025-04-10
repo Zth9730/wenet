@@ -58,7 +58,7 @@ train_config=train_conformer_pinyin.yaml
 dir=exp/pinyin_conformer
 tensorboard_dir=tensorboard
 # checkpoint=/data2/wangyuwen/output/new_wenet_firered.pt
-checkpoint=
+checkpoint=exp/pinyin_conformer/epoch_6.pt
 num_workers=8
 prefetch=10
 
@@ -184,7 +184,7 @@ fi
 if [ ${stage} -le 5 ] && [ ${stop_stage} -ge 5 ]; then
   # Test model, please specify the model you want to test by --checkpoint
   if [ ${average_checkpoint} == true ]; then
-    decode_checkpoint=/data_new/wangyuwen/wenet/examples/aishell/s0/exp/pinyin_conformer/epoch_4.pt
+    decode_checkpoint=/data_new/wangyuwen/wenet/examples/aishell/s0/exp/pinyin_conformer/epoch_5.pt
     #decode_checkpoint=$dir/avg_${average_num}.pt
     echo "do model average and final checkpoint is $decode_checkpoint"
     #python wenet/bin/average_model.py \
@@ -203,7 +203,7 @@ if [ ${stage} -le 5 ] && [ ${stop_stage} -ge 5 ]; then
     --modes $decode_modes \
     --config $dir/train.yaml \
     --data_type $data_type \
-    --test_data /data_new/wangyuwen/wenet/examples/aishell/s0/data/pinyin_aishell_kespeech/aishell_test_pinyin.list \
+    --test_data /data_new/wangyuwen/wenet/examples/aishell/s0/data/pinyin_aishell_kespeech/commond_test_pinyin.list \
     --checkpoint $decode_checkpoint \
     --beam_size 10 \
     --batch_size 32 \
@@ -214,7 +214,7 @@ if [ ${stage} -le 5 ] && [ ${stop_stage} -ge 5 ]; then
     ${decoding_chunk_size:+--decoding_chunk_size $decoding_chunk_size}
   for mode in ${decode_modes}; do
     python tools/compute-wer.py --char=1 --v=1 \
-      data/test/text $dir/$mode/text > $dir/$mode/wer
+      data/pinyin_aishell_kespeech/text_test_pinyin.txt $dir/$mode/text > $dir/$mode/wer
   done
 fi
 

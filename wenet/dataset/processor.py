@@ -429,11 +429,14 @@ def filter(sample,
         if len(sample['label']) < token_min_length:
             return False
         if len(sample['label']) > token_max_length:
+
             return False
         if num_frames != 0:
             if len(sample['label']) / num_frames < min_output_input_ratio:
+
                 return False
             if len(sample['label']) / num_frames > max_output_input_ratio:
+
                 return False
     return True
 

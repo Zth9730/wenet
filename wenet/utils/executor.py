@@ -58,9 +58,15 @@ class Executor:
 
         with model_context():
             for batch_idx, batch_dict in enumerate(train_data_loader):
+                # self.step += 1 if (batch_idx +
+                #                    1) % info_dict["accum_grad"] == 0 else 0
                 info_dict["tag"] = "TRAIN"
                 info_dict["step"] = self.step
                 info_dict["batch_idx"] = batch_idx
+                # info_dict["loss_dict"] = {"loss": 0}
+                # info_dict["grad_norm"] = 0
+                # log_per_step(writer, info_dict, timer=self.train_step_timer)
+                # continue
                 if wenet_join(group_join, info_dict):
                     break
 

@@ -14,8 +14,11 @@ encoder_conf:
     cnn_module_kernel: 15
     use_cnn_module: True
     activation_type: 'swish'
+    rank: 20
     pos_enc_layer_type: 'rel_pos'
     selfattention_layer_type: 'rel_selfattn'
+    #parallel_global_local: False
+
 
 # decoder related
 decoder: transformer
@@ -24,6 +27,7 @@ decoder_conf:
     linear_units: 2048
     num_blocks: 6
     dropout_rate: 0.1
+    #rank: 6
     positional_dropout_rate: 0.1
     self_attention_dropout_rate: 0.0
     src_attention_dropout_rate: 0.0
@@ -87,7 +91,7 @@ dataset_conf:
         sort_size: 500  # sort_size should be less than shuffle_size
     batch_conf:
         batch_type: 'static' # static or dynamic
-        batch_size: 16
+        batch_size: 32
 
 grad_clip: 5
 accum_grad: 4

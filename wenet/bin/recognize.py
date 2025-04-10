@@ -300,7 +300,8 @@ def main():
                     blank_id=blank_id,
                     blank_penalty=args.blank_penalty,
                     length_penalty=args.length_penalty,
-                    infos=infos)
+                    infos=infos
+                    )
                 for i, key in enumerate(keys):
                     for mode, hyps in results.items():
                         tokens = hyps[i].tokens

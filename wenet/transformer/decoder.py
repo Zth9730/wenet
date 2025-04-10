@@ -84,6 +84,7 @@ class TransformerDecoder(torch.nn.Module):
         head_dim: Optional[int] = None,
         mlp_type: str = 'position_wise_feed_forward',
         mlp_bias: bool = True,
+        rank: int = 6,
         n_expert: int = 8,
         n_expert_activated: int = 2,
         src_query_bias: bool = True,
@@ -107,7 +108,7 @@ class TransformerDecoder(torch.nn.Module):
                                                               eps=norm_eps)
         self.use_output_layer = use_output_layer
         if use_output_layer:
-            self.output_layer = torch.nn.Linear(attention_dim, vocab_size)
+            self.output_layer = torch.nn.Linear(attention_dim, vocab_size, bias=None)
         else:
             self.output_layer = torch.nn.Identity()
         self.num_blocks = num_blocks
@@ -129,6 +130,7 @@ class TransformerDecoder(torch.nn.Module):
                           dropout_rate,
                           activation,
                           mlp_bias,
+                          rank,
                           n_expert=n_expert,
                           n_expert_activated=n_expert_activated),
                 dropout_rate,
